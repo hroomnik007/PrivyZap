@@ -1,4 +1,4 @@
-import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest'
+import { describe, it, expect, vi, beforeEach } from 'vitest'
 
 const { queryMock } = vi.hoisted(() => ({ queryMock: vi.fn() }))
 
@@ -6,6 +6,12 @@ vi.mock('../db.js', () => ({
   pool: { query: queryMock },
   initDb: vi.fn(),
 }))
+// fetchLatestUpstreamVersions() now goes through safeFetch (SSRF guard + DNS
+// pinning), not the global fetch — mock it at the ssrf.js boundary.
+vi.mock('../ssrf.js', async (importOriginal) => {
+  const actual = await importOriginal<typeof import('../ssrf.js')>()
+  return { ...actual, safeFetch: vi.fn() }
+})
 
 import {
   effectiveLatestVersions,
@@ -13,6 +19,9 @@ import {
   getLatestVersionsMap,
   VERSION_GRACE_PERIOD_MS,
 } from '../versionCatalog.js'
+import { safeFetch } from '../ssrf.js'
+
+const safeFetchMock = vi.mocked(safeFetch)
 
 const NOW = new Date('2026-09-06T00:00:00.000Z')
 const DAY_MS = 24 * 60 * 60 * 1000
@@ -138,10 +147,7 @@ describe('fetchLatestUpstreamVersions', () => {
   beforeEach(() => {
     queryMock.mockReset()
     queryMock.mockResolvedValue({ rows: [] })
-  })
-
-  afterEach(() => {
-    vi.unstubAllGlobals()
+    safeFetchMock.mockReset()
   })
 
   function mockGithubResponse(overrides: Record<string, unknown> = {}) {
@@ -158,7 +164,7 @@ describe('fetchLatestUpstreamVersions', () => {
   }
 
   it('upserts latest_version/released_at and rotates previous_version only when the tag actually changed', async () => {
-    vi.stubGlobal('fetch', vi.fn().mockResolvedValue(mockGithubResponse()))
+    safeFetchMock.mockResolvedValue(mockGithubResponse() as never)
 
     await fetchLatestUpstreamVersions()
 
@@ -170,7 +176,7 @@ describe('fetchLatestUpstreamVersions', () => {
   })
 
   it('passes null released_at when GitHub omits/malforms published_at', async () => {
-    vi.stubGlobal('fetch', vi.fn().mockResolvedValue(mockGithubResponse({ published_at: 'not-a-date' })))
+    safeFetchMock.mockResolvedValue(mockGithubResponse({ published_at: 'not-a-date' }) as never)
 
     await fetchLatestUpstreamVersions()
 
@@ -179,7 +185,7 @@ describe('fetchLatestUpstreamVersions', () => {
   })
 
   it('skips a repo whose latest release is a prerelease/draft — no query issued for it', async () => {
-    vi.stubGlobal('fetch', vi.fn().mockResolvedValue(mockGithubResponse({ prerelease: true })))
+    safeFetchMock.mockResolvedValue(mockGithubResponse({ prerelease: true }) as never)
 
     await fetchLatestUpstreamVersions()
 
@@ -188,8 +194,10 @@ describe('fetchLatestUpstreamVersions', () => {
     expect(softwareArgs).not.toContain('nutshell')
   })
 
-  it('never throws when the GitHub fetch fails for a repo', async () => {
-    vi.stubGlobal('fetch', vi.fn().mockRejectedValue(new Error('network error')))
+  it('never throws when the GitHub fetch fails for a repo (safeFetch returns null)', async () => {
+    safeFetchMock.mockResolvedValue(null)
     await expect(fetchLatestUpstreamVersions()).resolves.toBeUndefined()
+    // No upsert issued for either repo.
+    expect(queryMock).not.toHaveBeenCalled()
   })
 })

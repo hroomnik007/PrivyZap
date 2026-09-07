@@ -3,6 +3,7 @@
 // (shared/trustScore.ts) can score freshness against the real current version
 // instead of a hand-maintained static list.
 import { pool } from './db.js'
+import { safeFetch } from './ssrf.js'
 import { parseMajorMinorPatch } from './shared/trustScore.js'
 
 interface UpstreamRepo {
@@ -10,8 +11,9 @@ interface UpstreamRepo {
   apiUrl: string
 }
 
-// Plain fetch (no SSRF wrapper) — same pattern as discovery.ts's audit.8333.space
-// calls, since these URLs are hardcoded, not user-supplied.
+// URLs are hardcoded (not user-supplied), but the fetch still goes through
+// safeFetch — connect-time DNS pinning + redirect-hop revalidation against
+// private/loopback ranges — as defence-in-depth, matching discovery.ts.
 const UPSTREAM_REPOS: UpstreamRepo[] = [
   { software: 'nutshell', apiUrl: 'https://api.github.com/repos/cashubtc/nutshell/releases/latest' },
   { software: 'cdk', apiUrl: 'https://api.github.com/repos/cashubtc/cdk/releases/latest' },
@@ -67,12 +69,12 @@ export function effectiveLatestVersions(
 export async function fetchLatestUpstreamVersions(): Promise<void> {
   for (const repo of UPSTREAM_REPOS) {
     try {
-      const res = await fetch(repo.apiUrl, {
-        signal: AbortSignal.timeout(10_000),
+      const res = await safeFetch(repo.apiUrl, {
+        timeoutMs: 10_000,
         headers: { Accept: 'application/vnd.github+json' },
       })
-      if (!res.ok) {
-        console.error(`[versionCatalog] GitHub API returned HTTP ${res.status} for ${repo.software}`)
+      if (!res || !res.ok) {
+        console.error(`[versionCatalog] GitHub API fetch failed${res ? ` (HTTP ${res.status})` : ''} for ${repo.software}`)
         continue
       }
       const data = await res.json() as Record<string, unknown>

@@ -4,6 +4,7 @@ import type { Filter } from 'nostr-tools'
 import WebSocket from 'ws'
 import { pool } from './db.js'
 import { probeMintToDb, isValidCashuMint } from './prober.js'
+import { safeFetch } from './ssrf.js'
 
 // Fast string-based pre-filter. isSafeUrl() in probeMintToDb is the authoritative SSRF
 // gate (ipaddr.js + full DNS resolution). This just avoids inserting obvious junk into DB.
@@ -287,8 +288,11 @@ interface RecentSwapStats {
 async function fetchRecentSwapStats(auditId: number): Promise<RecentSwapStats | null> {
   try {
     const url = `${AUDIT_SWAPS_BASE}${auditId}?limit=${AUDIT_SWAPS_WINDOW}`
-    const res = await fetch(url, { signal: AbortSignal.timeout(10_000) })
-    if (!res.ok) return null
+    // safeFetch (not plain fetch): connect-time DNS pinning + each redirect hop
+    // re-validated against private/loopback ranges. The host is hardcoded so
+    // this is defence-in-depth, not a fix for an active vector.
+    const res = await safeFetch(url, { timeoutMs: 10_000 })
+    if (!res || !res.ok) return null
     const data: unknown = await res.json()
     if (!Array.isArray(data)) return null
     let errors = 0
@@ -309,8 +313,8 @@ export async function discoverMintsFromApi(): Promise<number> {
   for (let skip = 0; skip < AUDIT_MAX_RECORDS; skip += AUDIT_PAGE_SIZE) {
     try {
       const url = `${AUDIT_API_BASE}?skip=${skip}&limit=${AUDIT_PAGE_SIZE}`
-      const res = await fetch(url, { signal: AbortSignal.timeout(10_000) })
-      if (!res.ok) break
+      const res = await safeFetch(url, { timeoutMs: 10_000 }) // SSRF-guarded (see fetchRecentSwapStats)
+      if (!res || !res.ok) break
       const data: unknown = await res.json()
       if (!Array.isArray(data) || data.length === 0) break
       for (const record of data) {

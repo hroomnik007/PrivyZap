@@ -179,6 +179,8 @@ const MAX_REDIRECTS = 3
 export interface SafeFetchOptions {
   timeoutMs?: number
   onError?: (err: unknown) => void
+  /** Extra request headers (e.g. an Accept header for a JSON API). */
+  headers?: Record<string, string>
 }
 
 /**
@@ -208,6 +210,7 @@ export async function safeFetch(
         credentials: 'omit',
         redirect: 'manual',
         dispatcher: safeAgent,
+        ...(options.headers ? { headers: options.headers } : {}),
       }) as unknown as Response
     } catch (err) {
       options.onError?.(err)
