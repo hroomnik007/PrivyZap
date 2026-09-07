@@ -13,8 +13,10 @@ describe('computeServerTrustScore', () => {
     expect(computeServerTrustScore(100, 25, 'Nutshell/0.20', 3, 100, 0)).toBe(100)
   })
 
-  it('caps the total at 100 even when components would exceed it', () => {
-    // contactCount 6 → cScore 10 (uncapped per-component), so raw sum > 100
+  it('a mint maxed on every component scores exactly 100', () => {
+    // uptime 45 + NUT 30 (28 nuts → cap 30) + version 15 + contact 5 (6 → clamp 3 → 5)
+    // + audit 5 = 100. Every component is individually capped at its weight now, so
+    // Math.min(100, …) is belt-and-suspenders rather than load-bearing.
     expect(computeServerTrustScore(100, 28, 'Nutshell/0.20', 6, 100, 0)).toBe(100)
   })
 
@@ -55,7 +57,7 @@ describe('computeServerTrustScore', () => {
     })
   })
 
-  describe('contact component (5%) — NOT capped per-component', () => {
+  describe('contact component (5%) — clamped at 3 contacts (audit finding H1 regression)', () => {
     it('contributes 0 with no contacts', () => {
       expect(computeServerTrustScore(0, null, null, 0, null, null)).toBe(3)
     })
@@ -63,9 +65,25 @@ describe('computeServerTrustScore', () => {
       // 0 + 5 + 2.5 = 7.5 → 8
       expect(computeServerTrustScore(0, null, null, 3, null, null)).toBe(8)
     })
-    it('exceeds 5 with 6 contacts (documents missing per-component cap)', () => {
-      // contactCount 6 → round(6/3*5)=10; 0 + 10 + 2.5 = 12.5 → 13
-      expect(computeServerTrustScore(0, null, null, 6, null, null)).toBe(13)
+    it('3, 6 and 60 contacts all score identically — the component never exceeds its 5-point weight', () => {
+      // `contactCount` comes from the mint's own /v1/info `contact` array (untrusted).
+      // A mint could list arbitrarily many entries; the clamp to 3 means every count
+      // ≥ 3 yields the same 0 + 5 + (audit null → 2.5) = 7.5 → 8.
+      const at3 = computeServerTrustScore(0, null, null, 3, null, null)
+      const at6 = computeServerTrustScore(0, null, null, 6, null, null)
+      const at60 = computeServerTrustScore(0, null, null, 60, null, null)
+      expect(at3).toBe(8)
+      expect(at6).toBe(8)
+      expect(at60).toBe(8)
+    })
+    it('a mint cannot inflate its whole Trust Score via contact count (audit finding H1)', () => {
+      // Before the fix: contactCount 60 → cScore round(60/3*5) = 100 → the total
+      // saturated at 100 regardless of uptime / NUT support / version. After the fix
+      // the score reflects the real signal: 0 uptime, no NUTs, no version, 60 contacts
+      // → 0 + 0 + 0 + 5 + (audit null → 2.5) = 7.5 → 8, nowhere near 100.
+      const score = computeServerTrustScore(0, null, null, 60, null, null)
+      expect(score).toBe(8)
+      expect(score).toBeLessThan(100)
     })
   })
 

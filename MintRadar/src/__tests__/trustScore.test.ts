@@ -61,10 +61,14 @@ describe('components', () => {
     expect(versionComponent('Nutshell/0.20')).toBe(15)
   })
 
-  it('contact is worth 5 points at 3 methods and is not capped per-component', () => {
+  it('contact is worth 5 points at 3 methods and is clamped there (audit finding H1)', () => {
     expect(contactComponent(0)).toBe(0)
+    expect(contactComponent(1)).toBe(2)
     expect(contactComponent(3)).toBe(5)
-    expect(contactComponent(6)).toBe(10)
+    // Clamp to 3: extra entries in the mint's untrusted /v1/info `contact` array
+    // never raise this component past its 5-point weight.
+    expect(contactComponent(6)).toBe(5)
+    expect(contactComponent(60)).toBe(5)
   })
 
   it('breakdown components sum to the same total the score reports', () => {

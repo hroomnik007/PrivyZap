@@ -172,11 +172,23 @@ export function versionComponent(
 }
 
 /**
- * Published contact methods (email / twitter / nostr) — 5 points.
- * Deliberately NOT capped per-component; see the trustScore tests.
+ * Published contact methods (email / twitter / nostr) — 5 points, capped.
+ *
+ * `contactCount` is clamped to 3 (the number of recognised channels) BEFORE the
+ * ratio, so 3-or-more contacts award the full 5 points and never more. This cap
+ * is an explicit anti-abuse control, not cosmetic: `contactCount` is derived
+ * from the mint's own `/v1/info` `contact` array (backend/src/prober.ts), which
+ * is untrusted mint-operator input (see the audit "Trust model" — the mint
+ * operator is Untrusted). Without the clamp a mint advertising e.g. 60 contact
+ * entries scored 100 on this component alone, saturating its entire Trust Score
+ * regardless of uptime / NUT support / version — the self-attestation inflation
+ * reported as finding H1 in the 2026-09-07 security audit. The clamp is applied
+ * here, the single call site every caller shares (backend probe, backend
+ * breakdown, frontend fallback, frontend breakdown), and it clamps the combined
+ * count across all channel types — it cannot be bypassed per-type.
  */
 export function contactComponent(contactCount: number): number {
-  return Math.round((contactCount / 3) * 5)
+  return Math.round((Math.min(contactCount, 3) / 3) * 5)
 }
 
 /**
