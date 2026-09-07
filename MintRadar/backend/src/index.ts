@@ -11,6 +11,7 @@ import { normalizeUrl } from './discovery.js'
 import { computeDegraded } from './degraded.js'
 import { authenticateNip98 } from './nip98Auth.js'
 import { fetchOgMintData, renderMintOgHtml } from './og.js'
+import { getMintIcon } from './mintIcon.js'
 import { computeTrustMovers, type MintScoreSnapshot } from './trustMovers.js'
 import { globalMeanRating, weightedRating } from './weightedRating.js'
 import { isTestMint } from './testMints.js'
@@ -222,7 +223,7 @@ app.use(cors({
 app.use(express.json())
 
 // Rate limiting — exempt public read-only endpoints that sit behind Cache-Control
-const RATE_LIMIT_EXEMPT = new Set(['/health', '/api/mints/known', '/api/stats'])
+const RATE_LIMIT_EXEMPT = new Set(['/health', '/api/mints/known', '/api/stats', '/api/mint/icon'])
 
 // Stricter limiters for write endpoints that trigger outbound fetches /
 // DNS resolution. Each submit performs 2+ outbound probes; each discovered
@@ -903,6 +904,43 @@ app.get('/api/mints/known', (_req: Request, res: Response): void => {
 // and get the normal client-rendered SPA instead. Always responds 200 with a
 // valid HTML fragment (generic fallback if the mint/url isn't found or the DB
 // lookup fails) since a crawler getting a 404/500 means no preview at all.
+// SSRF-safe favicon proxy — see backend/src/mintIcon.ts for the full rationale.
+// The frontend points every mint <img> here instead of fetching a mint-controlled
+// icon_url directly, so a hostile icon_url can't turn a page view into an IP /
+// User-Agent tracking beacon (2026-09-07 security audit). Known mints only;
+// bytes are fetched through safeFetch and re-served from our origin, cached
+// in-process. Anything unsafe/unfetchable → 404 and the client shows its SVG
+// placeholder. Exempt from the per-IP rate limit (read-only, cacheable, and the
+// in-process cache means upstream is hit at most once per mint per TTL anyway).
+app.get('/api/mint/icon', (req: Request, res: Response): void => {
+  const rawUrl = req.query['url']
+  if (typeof rawUrl !== 'string' || rawUrl.length === 0 || rawUrl.length > MAX_URL_LENGTH) {
+    res.status(400).end()
+    return
+  }
+
+  getMintIcon(rawUrl)
+    .then(icon => {
+      if (!icon) {
+        res.setHeader('Cache-Control', 'public, max-age=1800')
+        res.status(404).end()
+        return
+      }
+      res.setHeader('Content-Type', icon.contentType)
+      // Belt-and-suspenders against a mint serving something script-y that slipped
+      // the content-type allow-list: no active content, no framing, treat as an
+      // opaque same-origin resource.
+      res.setHeader('Content-Security-Policy', "default-src 'none'; sandbox")
+      res.setHeader('Cross-Origin-Resource-Policy', 'same-origin')
+      res.setHeader('Cache-Control', 'public, max-age=86400')
+      res.end(icon.body)
+    })
+    .catch((err: unknown) => {
+      if (IS_DEV) console.error('[/api/mint/icon]', err)
+      res.status(404).end()
+    })
+})
+
 app.get('/api/og/mint', (req: Request, res: Response): void => {
   const rawUrl = req.query['url']
   const hasValidUrl = typeof rawUrl === 'string' && rawUrl.length > 0 && rawUrl.length <= MAX_URL_LENGTH

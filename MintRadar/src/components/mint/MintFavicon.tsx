@@ -12,11 +12,20 @@ export function MintFavicon({ url, iconUrl, size = 22, radius = 5, className = '
   const hostname = (() => { try { return new URL(url).hostname } catch { return url } })()
   const [imgFailed, setImgFailed] = useState(false)
 
-  if (iconUrl && !imgFailed) {
+  // `iconUrl` is treated as a boolean hint ("this mint has an icon") ONLY — the
+  // bytes are always fetched through the backend's SSRF-guarded proxy, never
+  // straight from a mint-controlled host. A hostile icon_url in a mint's
+  // /v1/info can't turn a page view into an IP / User-Agent tracking beacon
+  // (2026-09-07 security audit). The proxy 404s anything unsafe/unfetchable and
+  // onError drops us to the SVG placeholder below.
+  const proxiedSrc = iconUrl ? `/api/mint/icon?url=${encodeURIComponent(url)}` : null
+
+  if (proxiedSrc && !imgFailed) {
     return (
       <img
-        src={iconUrl}
+        src={proxiedSrc}
         alt=""
+        loading="lazy"
         width={size}
         height={size}
         className={className}
