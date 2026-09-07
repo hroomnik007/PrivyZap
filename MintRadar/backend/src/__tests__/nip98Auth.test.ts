@@ -131,3 +131,70 @@ describe('authenticateNip98 — request URL reconstruction behind nginx', () => 
     expect(result.ok).toBe(false)
   })
 })
+
+describe('authenticateNip98 — replay / nonce cache', () => {
+  const URL = 'https://mintradar.pedani.eu/api/notifications/subscribe'
+
+  it('rejects the second use of the same token id within the validity window (body-swap replay)', async () => {
+    process.env['NODE_ENV'] = 'production'
+    vi.resetModules()
+    const { authenticateNip98 } = await import('../nip98Auth.js')
+
+    const { token, pubkey } = await signedToken(URL, 'POST')
+    const mkReq = () => fakeRequest({
+      authorization: token,
+      host: 'mintradar.pedani.eu',
+      originalUrl: '/api/notifications/subscribe',
+      method: 'POST',
+    })
+
+    // First request with this token — accepted.
+    expect(await authenticateNip98(mkReq())).toEqual({ ok: true, pubkey })
+    // Same signed event replayed (the request body it rides on is irrelevant —
+    // authenticateNip98 never sees it) — rejected.
+    expect(await authenticateNip98(mkReq())).toEqual({
+      ok: false, status: 401, error: 'NIP-98 token already used',
+    })
+  })
+
+  it('two independently-signed tokens from the same pubkey are both accepted', async () => {
+    process.env['NODE_ENV'] = 'production'
+    vi.resetModules()
+    const { authenticateNip98 } = await import('../nip98Auth.js')
+
+    const sk = generateSecretKey()
+    const a = await signedToken(URL, 'POST', sk)
+    // finalizeEvent stamps created_at in whole seconds; a second signing in the
+    // same second yields a different id anyway (schnorr nonce), but nudge time
+    // so the assertion is unambiguous.
+    await new Promise(r => setTimeout(r, 1100))
+    const b = await signedToken(URL, 'POST', sk)
+
+    expect(a.token).not.toBe(b.token)
+    expect((await authenticateNip98(fakeRequest({
+      authorization: a.token, host: 'mintradar.pedani.eu',
+      originalUrl: '/api/notifications/subscribe', method: 'POST',
+    })).then(r => r.ok))).toBe(true)
+    expect((await authenticateNip98(fakeRequest({
+      authorization: b.token, host: 'mintradar.pedani.eu',
+      originalUrl: '/api/notifications/subscribe', method: 'POST',
+    })).then(r => r.ok))).toBe(true)
+  })
+
+  it('_resetNip98NonceCache clears the cache so a token id can be seen fresh again', async () => {
+    process.env['NODE_ENV'] = 'production'
+    vi.resetModules()
+    const { authenticateNip98, _resetNip98NonceCache } = await import('../nip98Auth.js')
+
+    const { token } = await signedToken(URL, 'POST')
+    const mkReq = () => fakeRequest({
+      authorization: token, host: 'mintradar.pedani.eu',
+      originalUrl: '/api/notifications/subscribe', method: 'POST',
+    })
+
+    expect((await authenticateNip98(mkReq())).ok).toBe(true)
+    expect((await authenticateNip98(mkReq())).ok).toBe(false)
+    _resetNip98NonceCache()
+    expect((await authenticateNip98(mkReq())).ok).toBe(true)
+  })
+})

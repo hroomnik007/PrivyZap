@@ -16,6 +16,39 @@ export type Nip98AuthResult = Nip98AuthOk | Nip98AuthFail
 
 const IS_DEV = process.env['NODE_ENV'] !== 'production'
 
+// --- Single-use nonce cache (replay protection) -----------------------------
+//
+// nip98.validateToken already rejects a token whose `created_at` is outside a
+// ~60s window, but within that window the *same* signed event can be replayed
+// verbatim. The NIP-98 `payload` (body-hash) tag is optional and our client
+// doesn't send it, so nothing binds a captured token to the specific request
+// body it was signed alongside — an attacker who captures one subscribe token
+// could, within ~60s, resend it with a swapped body to overwrite that user's
+// own subscription. Impact is low (a user can only clobber their own row), so
+// this is defence-in-depth, but it's cheap: remember every accepted event id
+// for longer than the validity window and reject the second sighting.
+//
+// Same shape as the in-memory IP rate limiter in index.ts: a plain Map with a
+// periodic sweep. Process-local — good enough for a single-instance backend;
+// a horizontal scale-out would need this in Redis alongside the rate limiter.
+const NONCE_TTL_MS = 120_000
+const seenEventIds = new Map<string, number>()
+
+function sweepNonces(now: number): void {
+  for (const [id, expiresAt] of seenEventIds) {
+    if (now >= expiresAt) seenEventIds.delete(id)
+  }
+}
+
+const nonceSweepTimer = setInterval(() => sweepNonces(Date.now()), NONCE_TTL_MS)
+nonceSweepTimer.unref?.()
+
+// Test hook — lets a test start from a clean cache without reaching into module
+// internals.
+export function _resetNip98NonceCache(): void {
+  seenEventIds.clear()
+}
+
 // Reconstructs the absolute URL the client must have signed into its NIP-98
 // event's `u` tag.
 //
@@ -61,6 +94,21 @@ export async function authenticateNip98(req: Request): Promise<Nip98AuthResult> 
     if (typeof event.pubkey !== 'string' || event.pubkey.length !== 64) {
       return { ok: false, status: 401, error: 'Invalid NIP-98 authorization' }
     }
+
+    // Replay guard — only reached once the token is otherwise fully valid, so a
+    // stream of bad tokens can't fill the cache. `event.id` is the signed event
+    // hash: a second request bearing the same id (a replay, body swapped or not)
+    // is rejected until the id ages out past the validity window.
+    const now = Date.now()
+    sweepNonces(now)
+    if (typeof event.id === 'string' && event.id.length > 0) {
+      const seenExpiry = seenEventIds.get(event.id)
+      if (seenExpiry !== undefined && now < seenExpiry) {
+        return { ok: false, status: 401, error: 'NIP-98 token already used' }
+      }
+      seenEventIds.set(event.id, now + NONCE_TTL_MS)
+    }
+
     return { ok: true, pubkey: event.pubkey }
   } catch {
     // validateToken/unpackEventFromToken throw on any invalid case (missing

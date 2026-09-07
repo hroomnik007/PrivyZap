@@ -386,31 +386,41 @@ describe('POST /api/notifications/subscribe', () => {
     })
   })
 
+  // Each real request carries its own freshly-signed NIP-98 token, and the
+  // auth layer now enforces single-use per event id (replay guard). A token's
+  // id is the hash of [pubkey, created_at, kind, tags, content] — independent
+  // of the signature — so a distinct `createdAt` per iteration is what makes
+  // each token a distinct, non-replayed nonce for the same pubkey. Staggering
+  // backwards keeps every timestamp inside NIP-98's ±60s window.
+  // `base` is captured once so each iteration's `base - i` is genuinely
+  // distinct (recomputing Date.now() per call could collide as the wall clock
+  // ticks mid-loop, yielding a duplicate id → a 401 from the replay guard).
+  const freshHeader = (sk: Uint8Array, base: number, secondsAgo: number) =>
+    nip98Header(SUBSCRIBE_PATH, 'POST', { sk, createdAt: base - secondsAgo }).then(r => r.header)
+
   it('rate-limits a single pubkey after 30 requests/hour (31st → 429)', async () => {
     const sk = generateSecretKey()
-    // Reuse one signed token across the whole loop — the auth layer permits
-    // it (NIP-98 has no built-in single-use nonce), so this isolates the
-    // rate limiter itself as the thing under test.
-    const { header } = await nip98Header(SUBSCRIBE_PATH, 'POST', { sk })
+    const base = Math.round(Date.now() / 1000)
 
     for (let i = 0; i < 30; i++) {
       // Empty body still consumes a rate-limit slot (checked before body validation).
-      const r = await post(SUBSCRIBE_PATH, {}, header)
+      const r = await post(SUBSCRIBE_PATH, {}, await freshHeader(sk, base, i))
       expect(r.status).toBe(400)
     }
-    const limited = await post(SUBSCRIBE_PATH, {}, header)
+    const limited = await post(SUBSCRIBE_PATH, {}, await freshHeader(sk, base, 31))
     expect(limited.status).toBe(429)
   })
 
   it('does not let one pubkey exhausting its limit affect a different pubkey', async () => {
-    const { header: headerA } = await nip98Header(SUBSCRIBE_PATH, 'POST')
-    const { header: headerB } = await nip98Header(SUBSCRIBE_PATH, 'POST')
+    const skA = generateSecretKey()
+    const skB = generateSecretKey()
+    const base = Math.round(Date.now() / 1000)
 
     for (let i = 0; i < 30; i++) {
-      expect((await post(SUBSCRIBE_PATH, {}, headerA)).status).toBe(400)
+      expect((await post(SUBSCRIBE_PATH, {}, await freshHeader(skA, base, i))).status).toBe(400)
     }
-    expect((await post(SUBSCRIBE_PATH, {}, headerA)).status).toBe(429)
-    expect((await post(SUBSCRIBE_PATH, {}, headerB)).status).toBe(400)
+    expect((await post(SUBSCRIBE_PATH, {}, await freshHeader(skA, base, 31))).status).toBe(429)
+    expect((await post(SUBSCRIBE_PATH, {}, await freshHeader(skB, base, 0))).status).toBe(400)
   })
 
   it('does not log relays or notify flags (only truncated pubkey + mint)', async () => {
@@ -557,17 +567,20 @@ describe('POST /api/notifications/unsubscribe', () => {
 
   it('has its own independent 30/hour/pubkey budget from subscribe', async () => {
     const sk = generateSecretKey()
-    const { header: subHeader } = await nip98Header(SUBSCRIBE_PATH, 'POST', { sk })
-    const { header: unsubHeader } = await nip98Header(UNSUBSCRIBE_PATH, 'POST', { sk })
+    const now = Math.round(Date.now() / 1000)
+    // Fresh, non-replayed token per request (distinct created_at → distinct id).
+    const subHeaderAt = (secondsAgo: number) =>
+      nip98Header(SUBSCRIBE_PATH, 'POST', { sk, createdAt: now - secondsAgo }).then(r => r.header)
 
     // Exhaust subscribe's budget for this pubkey.
     for (let i = 0; i < 30; i++) {
-      expect((await post(SUBSCRIBE_PATH, {}, subHeader)).status).toBe(400)
+      expect((await post(SUBSCRIBE_PATH, {}, await subHeaderAt(i))).status).toBe(400)
     }
-    expect((await post(SUBSCRIBE_PATH, {}, subHeader)).status).toBe(429)
+    expect((await post(SUBSCRIBE_PATH, {}, await subHeaderAt(31))).status).toBe(429)
 
     // unsubscribe for the same pubkey is unaffected.
     query.mockResolvedValueOnce({ rowCount: 1 })
+    const { header: unsubHeader } = await nip98Header(UNSUBSCRIBE_PATH, 'POST', { sk })
     const res = await post(UNSUBSCRIBE_PATH, { mintUrl: 'https://mint.example.com' }, unsubHeader)
     expect(res.status).toBe(200)
   })
