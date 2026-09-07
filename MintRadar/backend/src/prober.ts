@@ -1,5 +1,6 @@
 import dns from 'dns'
 import { fetch as undiciFetch } from 'undici'
+import pLimit from 'p-limit'
 import { pool } from './db.js'
 import { checkUrlSafety, safeFetch } from './ssrf.js'
 import { computeTrustScore, versionFreshnessScore } from './shared/trustScore.js'
@@ -185,6 +186,111 @@ export async function pruneUnvalidatedMints(): Promise<number> {
   return res.rowCount ?? 0
 }
 
+// ── Recurring revalidation ──────────────────────────────────────────────────
+//
+// isValidCashuMint() only runs once, at submit/discovery time. The 5-min probe
+// re-checks reachability + SSRF ranges every cycle but not Cashu content, and
+// pruneUnvalidatedMints() permanently exempts any row with a single past success.
+// So a URL that passed the gate once and is then repointed (DNS change, or a
+// redirect) to some other host was probed by MintRadar's server forever —
+// a confused-deputy: recurring GET /v1/info to an attacker-chosen target.
+//
+// The SSRF guard (checkUrlSafetyForProtocols + connect-time safeLookup re-check)
+// still blocks private/loopback/link-local/CGN ranges and DNS-rebinding, so the
+// target is necessarily a PUBLIC host — the residual impact is "recurring
+// unauthenticated GET to another public https host", not internal SSRF. This
+// bounds that window: a mint found reachable-but-not-a-Cashu-mint for
+// REVALIDATION_REAP_DAYS straight is deleted from the probe rotation.
+
+type RevalidationStatus = 'ok' | 'not-a-mint' | 'unreachable'
+
+// Days a mint must serve non-Cashu content CONTINUOUSLY before it is reaped.
+// Long enough that a multi-day outage of a genuine mint (which reads as
+// 'unreachable', not 'not-a-mint', and never advances the clock anyway) is
+// never at risk; short enough to close the attack window.
+const REVALIDATION_REAP_DAYS = 7
+
+// Concurrency for the daily sweep — lower than the 5-min probe's (10) since this
+// runs once a day and isn't latency-sensitive.
+const REVALIDATION_CONCURRENCY = 6
+
+// Stronger than isValidCashuMint(), and used ONLY here (never the lenient
+// submit/discovery gate, which must not start rejecting an unusual-but-real
+// mint). A functioning Cashu mint serves a non-empty /v1/info `nuts` object
+// AND a /v1/keys response carrying at least one keyset. Crucially it separates
+// "reachable but not a mint" (repoint target, redirect, a `{"nuts":{}}` stub,
+// an HTML page) from "transiently unreachable" (5xx, timeout, DNS failure) —
+// only the former advances the reap clock.
+async function revalidateMintContent(url: string): Promise<RevalidationStatus> {
+  let infoRes: Response | null
+  let keysRes: Response | null
+  try {
+    ;[infoRes, keysRes] = await Promise.all([
+      safeFetch(`${url}/v1/info`, { timeoutMs: PROBE_TIMEOUT_MS }),
+      safeFetch(`${url}/v1/keys`, { timeoutMs: PROBE_TIMEOUT_MS }),
+    ])
+  } catch {
+    return 'unreachable'
+  }
+
+  if (!infoRes) return 'unreachable'
+  if (infoRes.status >= 500) return 'unreachable'
+  if (!infoRes.ok) return 'not-a-mint' // 4xx — the mint API genuinely isn't here
+
+  try {
+    const info = await infoRes.json() as Record<string, unknown>
+    const nuts = info['nuts']
+    const nutsOk =
+      typeof nuts === 'object' && nuts !== null && !Array.isArray(nuts) &&
+      Object.keys(nuts as Record<string, unknown>).length > 0
+    if (!nutsOk) return 'not-a-mint'
+
+    if (!keysRes) return 'unreachable'
+    if (keysRes.status >= 500) return 'unreachable'
+    if (!keysRes.ok) return 'not-a-mint'
+    const keys = await keysRes.json() as Record<string, unknown>
+    const keysets = keys['keysets']
+    return Array.isArray(keysets) && keysets.length > 0 ? 'ok' : 'not-a-mint'
+  } catch {
+    return 'not-a-mint' // a 200 whose body isn't a mint's JSON
+  }
+}
+
+export async function revalidateMints(): Promise<{ checked: number; invalid: number; reaped: number }> {
+  const res = await pool.query('SELECT url FROM mints')
+  const urls = (res.rows as { url: string }[]).map(r => r.url)
+  const limit = pLimit(REVALIDATION_CONCURRENCY)
+
+  let invalid = 0
+  await Promise.allSettled(urls.map(url => limit(async () => {
+    const status = await revalidateMintContent(url)
+    if (status === 'ok') {
+      // Validated — clear any prior reap clock.
+      await pool.query('UPDATE mints SET revalidated_at = NOW(), invalid_since = NULL WHERE url = $1', [url])
+    } else if (status === 'not-a-mint') {
+      invalid++
+      // Start (or keep) the reap clock.
+      await pool.query('UPDATE mints SET revalidated_at = NOW(), invalid_since = COALESCE(invalid_since, NOW()) WHERE url = $1', [url])
+    } else {
+      // Transiently unreachable — note the check ran, but do NOT advance the
+      // reap clock and do NOT clear it (a repointed host that also goes down
+      // shouldn't get a reprieve).
+      await pool.query('UPDATE mints SET revalidated_at = NOW() WHERE url = $1', [url])
+    }
+  })))
+
+  const reap = await pool.query(
+    `DELETE FROM mints
+     WHERE invalid_since IS NOT NULL
+       AND invalid_since < NOW() - INTERVAL '${REVALIDATION_REAP_DAYS} days'`
+  )
+  const reaped = reap.rowCount ?? 0
+  if (reaped > 0) {
+    console.log(`[revalidate] reaped ${reaped} mint(s) serving non-Cashu content for ${REVALIDATION_REAP_DAYS}+ days`)
+  }
+  return { checked: urls.length, invalid, reaped }
+}
+
 export async function probeMintToDb(url: string): Promise<void> {
   const urlSafety = await checkUrlSafety(url)
   if (urlSafety === 'blocked') {
@@ -362,6 +468,21 @@ export async function probeMintToDb(url: string): Promise<void> {
     [url, online, latencyMs]
   )
   const histId: number | undefined = histInsert.rows[0]?.id as number | undefined
+
+  // Maintain `invalid_since` — the marker revalidateMints() reaps on. A probe
+  // that REACHES the host but gets something that isn't the Cashu mint API
+  // (a 4xx, or a 200 whose body has no `nuts` object) is the signature of a URL
+  // repointed to a non-mint host after it first passed validation. Network
+  // errors / 5xx / timeouts are transient and must NOT advance the reap clock.
+  if (online) {
+    await pool.query('UPDATE mints SET invalid_since = NULL WHERE url = $1', [url])
+  } else if (
+    lastError === 'Invalid Cashu response' ||
+    lastError === 'Invalid JSON response' ||
+    /^HTTP 4\d\d$/.test(lastError ?? '')
+  ) {
+    await pool.query('UPDATE mints SET invalid_since = COALESCE(invalid_since, NOW()) WHERE url = $1', [url])
+  }
 
   if (previousOnline !== null && isNotificationServiceEnabled()) {
     let direction: 'down' | 'up' | null = null

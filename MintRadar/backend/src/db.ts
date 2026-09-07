@@ -99,6 +99,15 @@ export async function initDb(): Promise<void> {
     'ALTER TABLE mints ADD COLUMN IF NOT EXISTS audit_recent_errors INTEGER',
     'ALTER TABLE mints ADD COLUMN IF NOT EXISTS last_trust_score INTEGER',
     'ALTER TABLE mints ADD COLUMN IF NOT EXISTS last_error TEXT',
+    // Recurring-revalidation markers (prober.ts revalidateMints()): `invalid_since`
+    // is set the first time a mint is found REACHABLE-but-not-a-Cashu-mint (a URL
+    // repointed via DNS/redirect after it first passed the submit/discovery gate)
+    // and cleared whenever it validates again; a mint whose `invalid_since` is
+    // older than REVALIDATION_REAP_DAYS is deleted so the 5-min probe stops
+    // hammering an attacker-chosen host forever. `revalidated_at` is the last time
+    // the daily strong (/v1/info + /v1/keys) check ran for this mint.
+    'ALTER TABLE mints ADD COLUMN IF NOT EXISTS invalid_since TIMESTAMPTZ',
+    'ALTER TABLE mints ADD COLUMN IF NOT EXISTS revalidated_at TIMESTAMPTZ',
     'ALTER TABLE mints ADD COLUMN IF NOT EXISTS server_location TEXT',
     'ALTER TABLE mints ADD COLUMN IF NOT EXISTS units JSONB',
     'ALTER TABLE mints ADD COLUMN IF NOT EXISTS mint_methods JSONB',

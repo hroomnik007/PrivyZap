@@ -1,6 +1,6 @@
 import cron from 'node-cron'
 import pLimit from 'p-limit'
-import { getKnownMints, probeMintToDb, pruneOldHistory, pruneUnvalidatedMints, backfillServerLocations } from './prober.js'
+import { getKnownMints, probeMintToDb, pruneOldHistory, pruneUnvalidatedMints, revalidateMints, backfillServerLocations } from './prober.js'
 import { discoverMintsFromNostr, discoverMintsFromApi } from './discovery.js'
 import { refreshAllMintReviews } from './reviewsSync.js'
 import { refreshTrustMoversRollup } from './trustMoversRollup.js'
@@ -71,6 +71,25 @@ export function startCron(): void {
     } catch (err) {
       if (process.env['NODE_ENV'] !== 'production') {
         console.error('[cron] unvalidated mint prune error:', err)
+      }
+    }
+  })
+
+  // Revalidate every mint's Cashu content once a day (4:15am) and reap any that
+  // has served non-Cashu content continuously for a week — catches a mint URL
+  // repointed (DNS change / redirect) to a non-mint host AFTER it first passed
+  // the one-time submit/discovery validation, so the 5-min probe stops issuing
+  // recurring requests to an attacker-chosen host indefinitely (confused-deputy).
+  // Once a day is enough: the 5-min probe already flips such a mint offline
+  // within minutes (dropping it from recommendations / marking it degraded);
+  // this job is what eventually removes it from the rotation entirely.
+  cron.schedule('15 4 * * *', async () => {
+    try {
+      const { checked, invalid, reaped } = await revalidateMints()
+      console.log(`[cron] revalidated ${checked} mint(s): ${invalid} not a valid Cashu mint, ${reaped} reaped`)
+    } catch (err) {
+      if (process.env['NODE_ENV'] !== 'production') {
+        console.error('[cron] revalidation error:', err)
       }
     }
   })

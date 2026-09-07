@@ -174,3 +174,67 @@ describe('probeMintToDb — transition detection', () => {
     await expect(probeMintToDb(MINT)).resolves.toBeUndefined()
   })
 })
+
+// ── invalid_since maintenance (feeds revalidateMints()'s reap) ────────────────
+//
+// A probe that REACHES the host but gets something that isn't a Cashu mint API
+// (4xx, or a 200 with no `nuts` object) is the signature of a URL repointed to a
+// non-mint host after it first passed validation. probeMintToDb must start the
+// reap clock (`invalid_since = COALESCE(invalid_since, NOW())`) in that case,
+// clear it on a healthy probe, and leave it alone for transient failures.
+
+describe('probeMintToDb — invalid_since reap-clock maintenance', () => {
+  const invalidSinceUpdates = () =>
+    query.mock.calls
+      .map(c => String(c[0]).replace(/\s+/g, ' ').trim())
+      .filter(sql => /^UPDATE mints SET invalid_since/.test(sql))
+
+  it('clears invalid_since on a healthy (online) probe', async () => {
+    previousRows = []
+    mintOnline()
+
+    await probeMintToDb(MINT)
+
+    expect(invalidSinceUpdates()).toEqual(['UPDATE mints SET invalid_since = NULL WHERE url = $1'])
+  })
+
+  it('starts the reap clock when the host answers 404 (mint API no longer there)', async () => {
+    previousRows = []
+    safeFetch.mockResolvedValue({ ok: false, status: 404 })
+
+    await probeMintToDb(MINT)
+
+    expect(invalidSinceUpdates()).toEqual([
+      'UPDATE mints SET invalid_since = COALESCE(invalid_since, NOW()) WHERE url = $1',
+    ])
+  })
+
+  it('starts the reap clock when the host answers 200 with no `nuts` object', async () => {
+    previousRows = []
+    safeFetch.mockResolvedValue({ ok: true, json: async () => ({ name: 'Not a mint' }) })
+
+    await probeMintToDb(MINT)
+
+    expect(invalidSinceUpdates()).toEqual([
+      'UPDATE mints SET invalid_since = COALESCE(invalid_since, NOW()) WHERE url = $1',
+    ])
+  })
+
+  it('does NOT touch invalid_since for a transient failure (network error / timeout)', async () => {
+    previousRows = []
+    mintOffline() // safeFetch → null
+
+    await probeMintToDb(MINT)
+
+    expect(invalidSinceUpdates()).toEqual([])
+  })
+
+  it('does NOT touch invalid_since on a 5xx (transient server error, retried then recorded offline)', async () => {
+    previousRows = []
+    safeFetch.mockResolvedValue({ ok: false, status: 503 })
+
+    await probeMintToDb(MINT)
+
+    expect(invalidSinceUpdates()).toEqual([])
+  })
+})
