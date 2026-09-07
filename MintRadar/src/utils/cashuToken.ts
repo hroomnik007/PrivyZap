@@ -115,6 +115,66 @@ export function parseCashuToken(raw: string): TokenParseResult {
   }
 }
 
+const MAX_MINT_URL_LENGTH = 500
+
+/** Thrown when a pasted token's `mint` field is not a safe, public https URL. */
+export class InvalidMintUrlError extends Error {
+  constructor(message: string) {
+    super(message)
+    this.name = 'InvalidMintUrlError'
+  }
+}
+
+// Loopback / private / link-local / ULA / unspecified / CGNAT host patterns,
+// plus `localhost`. Not a full IP parser — enough to stop the obvious "point
+// the token's mint at an internal service" case.
+function isNonPublicHost(hostname: string): boolean {
+  const h = hostname.toLowerCase().replace(/\.$/, '').replace(/^\[|\]$/g, '')
+  if (h === 'localhost' || h.endsWith('.localhost')) return true
+  if (h === '' || h === '0.0.0.0' || h === '::' || h === '::1') return true
+  if (/^\d{1,3}(\.\d{1,3}){3}$/.test(h)) {
+    const [a, b] = h.split('.').map(Number)
+    if (a === 0 || a === 127 || a === 10) return true
+    if (a === 192 && b === 168) return true
+    if (a === 169 && b === 254) return true
+    if (a === 172 && b! >= 16 && b! <= 31) return true
+    if (a === 100 && b! >= 64 && b! <= 127) return true // CGNAT 100.64/10
+  }
+  if (/^f[cd][0-9a-f]{2}:/.test(h)) return true   // ULA fc00::/7
+  if (/^fe[89ab][0-9a-f]:/.test(h)) return true   // link-local fe80::/10
+  return false
+}
+
+/**
+ * Guard the mint URL extracted from a *pasted* (fully user-controlled) Cashu
+ * token before ANY code path uses it for a network request. Anyone can craft a
+ * token whose `mint` field points at an attacker-chosen host — including an
+ * internal port/service on the victim's network — so require an https:// URL
+ * with a public host and a sane length, consistent with core/mint/api.ts's
+ * validateUrl() and the MintDetail "Test latency" guard (2026-09-07 audit, L4).
+ * Throws InvalidMintUrlError with a user-facing message.
+ */
+export function assertProbeableMintUrl(mint: string): void {
+  if (typeof mint !== 'string' || mint.length === 0) {
+    throw new InvalidMintUrlError("This token doesn't name a mint URL.")
+  }
+  if (mint.length > MAX_MINT_URL_LENGTH) {
+    throw new InvalidMintUrlError('The mint URL in this token is unreasonably long — not contacting it.')
+  }
+  let url: URL
+  try {
+    url = new URL(mint)
+  } catch {
+    throw new InvalidMintUrlError(`The token's mint URL is malformed — not contacting it.`)
+  }
+  if (url.protocol !== 'https:') {
+    throw new InvalidMintUrlError(`The token's mint URL is not https:// — refusing to contact it.`)
+  }
+  if (isNonPublicHost(url.hostname)) {
+    throw new InvalidMintUrlError(`The token's mint URL points at a non-public host (${url.hostname}) — refusing to contact it.`)
+  }
+}
+
 export interface DecodedProof {
   proof: Proof
   /** Whether this proof actually carries a NUT-12 DLEQ payload at all. */
@@ -146,6 +206,7 @@ export async function decodeTokenWithMint(raw: string): Promise<FullTokenDecode>
   const token = raw.trim()
   const { info, error } = parseCashuToken(token)
   if (!info) throw new Error(error ?? 'Invalid token')
+  assertProbeableMintUrl(info.mint)
 
   const wallet = new Wallet(info.mint, { unit: info.unit })
   await wallet.loadMint()
@@ -200,6 +261,7 @@ export async function checkTokenSpentState(raw: string): Promise<TokenSpentCheck
   const token = raw.trim()
   const { info, error } = parseCashuToken(token)
   if (!info) throw new Error(error ?? 'Invalid token')
+  assertProbeableMintUrl(info.mint)
 
   const wallet = new Wallet(info.mint, { unit: info.unit })
   await wallet.loadMint()

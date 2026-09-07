@@ -6,7 +6,7 @@ import { MintFavicon } from '@/components/mint/MintFavicon'
 import { IcShield } from '@/components/mint/IcShield'
 import { useNow } from '@/hooks/useNow'
 import { useTapTooltip } from '@/hooks/useTapTooltip'
-import { parseCashuToken, formatTokenAmount, decodeTokenWithMint, checkTokenSpentState, type TokenInfo, type TokenSpentCheck } from '@/utils/cashuToken'
+import { parseCashuToken, formatTokenAmount, decodeTokenWithMint, checkTokenSpentState, InvalidMintUrlError, type TokenInfo, type TokenSpentCheck } from '@/utils/cashuToken'
 import { normalizeMintUrl, trustColor, trustScoreInfo, mintRiskLevel } from '@/utils/mintFormatting'
 import { isTestMint } from '@/constants/testMints'
 import './Tools.css'
@@ -45,6 +45,7 @@ type VerifyResult =
   | { status: 'invalid' }
   | { status: 'no-dleq' }
   | { status: 'unreachable' }
+  | { status: 'bad-mint-url'; message: string }
 
 // The combined flow runs two phases back to back: a synchronous local parse, then a
 // live DLEQ check against the mint. Tracked separately from VerifyResult so the button
@@ -60,6 +61,7 @@ type Phase = 'idle' | 'inspecting' | 'verifying'
 type SpentCheckResult =
   | { status: 'ok'; data: TokenSpentCheck }
   | { status: 'error'; message: string }
+  | { status: 'bad-mint-url'; message: string }
 
 function TokenInspector({ knownMints }: { knownMints: KnownMint[] }) {
   const navigate = useNavigate()
@@ -125,11 +127,18 @@ function TokenInspector({ knownMints }: { knownMints: KnownMint[] }) {
       } else {
         setVerify({ status: 'invalid' })
       }
-    } catch {
-      // Any throw here is a transport/mint problem (loadMint failed, timeout, keyset
-      // missing) — never evidence that the token itself is bad. The parse result set
-      // above stays on screen regardless of how this turns out.
-      setVerify({ status: 'unreachable' })
+    } catch (err) {
+      if (err instanceof InvalidMintUrlError) {
+        // The token names a mint URL we refuse to contact (not https://, or a
+        // non-public host) — a positive finding about the token, not a transport
+        // problem. No network request was made.
+        setVerify({ status: 'bad-mint-url', message: err.message })
+      } else {
+        // Any other throw is a transport/mint problem (loadMint failed, timeout,
+        // keyset missing) — never evidence that the token itself is bad. The
+        // parse result set above stays on screen regardless.
+        setVerify({ status: 'unreachable' })
+      }
     }
     setPhase('idle')
   }
@@ -146,10 +155,16 @@ function TokenInspector({ knownMints }: { knownMints: KnownMint[] }) {
       const data = await checkTokenSpentState(token)
       outcome = { status: 'ok', data }
     } catch (err) {
-      // Mint offline/unreachable, or the token itself couldn't be resolved —
-      // either way this must not take down the rest of the inspector UI.
-      const detail = err instanceof Error && err.message ? err.message : 'Could not reach the mint.'
-      outcome = { status: 'error', message: detail }
+      if (err instanceof InvalidMintUrlError) {
+        // No network request was made — the token names a mint URL we refuse to
+        // contact. This IS a finding about the token.
+        outcome = { status: 'bad-mint-url', message: err.message }
+      } else {
+        // Mint offline/unreachable, or the token itself couldn't be resolved —
+        // either way this must not take down the rest of the inspector UI.
+        const detail = err instanceof Error && err.message ? err.message : 'Could not reach the mint.'
+        outcome = { status: 'error', message: detail }
+      }
     }
 
     // A local/cached mint response can resolve in well under 100ms, which made the
@@ -290,6 +305,11 @@ function TokenInspector({ knownMints }: { knownMints: KnownMint[] }) {
                 ⚠️ Could not reach mint to verify (try again later). This says nothing about the token itself.
               </div>
             )}
+            {verify?.status === 'bad-mint-url' && (
+              <div className="token-verify-result tv-bad">
+                ❌ {verify.message} A legitimate Cashu token points at a public https:// mint.
+              </div>
+            )}
           </div>
 
           <div className="token-spent">
@@ -330,6 +350,11 @@ function TokenInspector({ knownMints }: { knownMints: KnownMint[] }) {
             {spentResult?.status === 'error' && (
               <div className="token-verify-result tv-unknown">
                 ⚠️ Could not check spent status — {spentResult.message} This says nothing about the token itself.
+              </div>
+            )}
+            {spentResult?.status === 'bad-mint-url' && (
+              <div className="token-verify-result tv-bad">
+                ❌ {spentResult.message} A legitimate Cashu token points at a public https:// mint.
               </div>
             )}
           </div>
