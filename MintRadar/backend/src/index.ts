@@ -55,6 +55,18 @@ const ALLOWED_ORIGINS = (
 
 const MAX_URL_LENGTH = 500
 const RATE_LIMIT_WINDOW_MS = 60_000
+
+// Strip control characters (CR/LF/tab/NUL/ANSI-escape/…) and cap the length
+// before interpolating an untrusted string into a plain-text log line, so it
+// cannot forge or split log entries or inject terminal escapes into a log
+// viewer. `new URL()` (used on the /unsubscribe path) silently *drops* tab/CR/LF
+// per the WHATWG spec rather than rejecting, so an explicit strip is needed
+// wherever a raw client string reaches console.* — e.g. relay URLs in
+// validateRelays(), which keeps the original string, not the parsed URL.
+function sanitizeLogValue(s: string): string {
+  // eslint-disable-next-line no-control-regex
+  return s.replace(/[\u0000-\u001f\u007f]/g, '\uFFFD').slice(0, 200)
+}
 const RATE_LIMIT_MAX = 60
 
 // ── Types ──────────────────────────────────────────────────────
@@ -325,8 +337,41 @@ app.get('/api/mint/probe', (req: Request, res: Response): void => {
     return
   }
 
-  probeMint(url)
-    .then(status => { res.json(status) })
+  // This endpoint is unauthenticated and SSRF-guarded (safeFetch: private/
+  // loopback/link-local/CGN ranges + DNS-rebinding blocked, GET to /v1/info and
+  // /v1/keysets only). Reflecting the fetched body back to the caller makes it a
+  // (weak) oracle for *public* https hosts. Mint Detail genuinely needs the full
+  // live /v1/info for a mint the user is viewing, and the Dashboard submit form
+  // needs name/version/nut-count for a mint about to be submitted — so:
+  //   - known mint (already in `mints`, already probed continuously by the
+  //     public cron): return the full status, nothing new leaks.
+  //   - any other URL: return only the fields the submit preview renders
+  //     (online, latency, and a stripped-down info: name/version/nut keys) —
+  //     not the mint's full contact list / MOTD / description / raw keysets.
+  Promise.all([probeMint(url), pool.query('SELECT 1 FROM mints WHERE url = $1', [url])])
+    .then(([status, known]) => {
+      if ((known.rowCount ?? 0) > 0) {
+        res.json(status)
+        return
+      }
+      res.json({
+        url: status.url,
+        online: status.online,
+        latencyMs: status.latencyMs,
+        checkedAt: status.checkedAt,
+        info: status.info
+          ? {
+              name: status.info.name,
+              version: status.info.version,
+              // keys only — enough for `Object.keys(nuts).length`, none of the
+              // per-NUT config an arbitrary host might stuff in here.
+              nuts: Object.fromEntries(Object.keys(status.info.nuts).map(k => [k, {}])),
+            }
+          : null,
+        keysets: null,
+        ...(status.error !== undefined ? { error: status.error } : {}),
+      })
+    })
     .catch((err: unknown) => {
       if (IS_DEV) console.error('[/api/mint/probe] unexpected error:', err)
       res.json({
@@ -1255,7 +1300,7 @@ async function validateRelays(relays: unknown, logContext: string): Promise<stri
   if (blocked.length > 0) {
     console.warn(
       `[notifications] relay validation rejected (${logContext}): blocked — ` +
-      blocked.map(c => c.url).join(', ')
+      blocked.map(c => sanitizeLogValue(c.url)).join(', ')
     )
     return null
   }
@@ -1264,7 +1309,7 @@ async function validateRelays(relays: unknown, logContext: string): Promise<stri
   if (dnsErrors.length > 0) {
     console.warn(
       `[notifications] relay(s) unresolvable but accepted (${logContext}): ` +
-      dnsErrors.map(c => c.url).join(', ')
+      dnsErrors.map(c => sanitizeLogValue(c.url)).join(', ')
     )
   }
 

@@ -11,6 +11,7 @@ import { useMintProbe } from '@/hooks/useMintProbe'
 import { useMintHistory } from '@/hooks/useMintHistory'
 import { useKnownMints } from '@/hooks/useKnownMints'
 import { useMintReviews } from '@/hooks/useMintReviews'
+import { usePendingAutoWatch } from '@/hooks/usePendingAutoWatch'
 import { submitMintReview } from '@/hooks/useSubmitReview'
 import { useWatchlistStore } from '@/stores/watchlist.store'
 import { useAuthStore } from '@/stores/auth.store'
@@ -344,28 +345,23 @@ function MintDetailContent({ url }: { url: string }) {
   const isLoggedIn = profile !== null
 
   // "+ Watch" while logged out opens a modal instead of a silent no-op/redirect.
-  // pendingAutoWatchRef is consumed exactly once — set when the user confirms
-  // login from that modal, cleared as soon as it fires (success or not) so a
-  // later, unrelated login never triggers a surprise auto-add.
+  // The pending "auto-add after login" intent lives in usePendingAutoWatch, which
+  // pins it to this mint URL + time so a route-param change, an unmount, or a
+  // much-later unrelated login can't make it add the wrong mint (2026-09-07 audit, L7).
   const [showWatchLoginModal, setShowWatchLoginModal] = useState(false)
-  const pendingAutoWatchRef = useRef(false)
-  const wasLoggedInRef = useRef(isLoggedIn)
-  useEffect(() => {
-    if (!wasLoggedInRef.current && isLoggedIn && pendingAutoWatchRef.current) {
-      pendingAutoWatchRef.current = false
-      if (!useWatchlistStore.getState().mints.includes(url)) void addMint(url)
-    }
-    wasLoggedInRef.current = isLoggedIn
-  }, [isLoggedIn, url, addMint])
+  const autoWatch = useCallback((u: string) => {
+    if (!useWatchlistStore.getState().mints.includes(u)) void addMint(u)
+  }, [addMint])
+  const { arm: armAutoWatch, disarm: disarmAutoWatch } = usePendingAutoWatch(url, isLoggedIn, autoWatch)
   const closeWatchLoginModal = useCallback(() => {
     setShowWatchLoginModal(false)
-    pendingAutoWatchRef.current = false
-  }, [setShowWatchLoginModal])
+    disarmAutoWatch() // (c) explicit Cancel / Escape / overlay / × — the user backed out.
+  }, [setShowWatchLoginModal, disarmAutoWatch])
   const confirmWatchLogin = useCallback(() => {
-    pendingAutoWatchRef.current = true
+    armAutoWatch()
     setShowWatchLoginModal(false)
     window.dispatchEvent(new CustomEvent('mintradar:open-login'))
-  }, [setShowWatchLoginModal])
+  }, [armAutoWatch])
   useEffect(() => {
     if (!showWatchLoginModal) return
     const h = (e: KeyboardEvent) => { if (e.key === 'Escape') closeWatchLoginModal() }
@@ -460,13 +456,21 @@ function MintDetailContent({ url }: { url: string }) {
   const [showComparisonModal, setShowComparisonModal] = useState(false)
 
   async function testClientLatency() {
+    // `url` is the /mint/:url route param (decodeURIComponent'd) — not
+    // guaranteed to be a real mint. Validate before firing a request straight
+    // from the visitor's browser, the same way core/mint/api.ts validates a
+    // probe URL (https:// scheme + length cap). (2026-09-07 audit, L6.)
+    if (!url.startsWith('https://') || url.length > 500) {
+      setClientLatency('Invalid mint URL')
+      return
+    }
     setTestingLatency(true)
     setClientLatency(null)
     const ctrl = new AbortController()
     const timeout = setTimeout(() => ctrl.abort(), 5000)
     const t0 = performance.now()
     try {
-      const res = await fetch(url.replace(/\/$/, '') + '/v1/info', { cache: 'no-store', signal: ctrl.signal })
+      const res = await fetch(url.replace(/\/$/, '') + '/v1/info', { cache: 'no-store', credentials: 'omit', signal: ctrl.signal })
       clearTimeout(timeout)
       if (res.ok) {
         setClientLatency(Math.round(performance.now() - t0))

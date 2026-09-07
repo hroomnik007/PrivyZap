@@ -245,6 +245,30 @@ describe('POST /api/notifications/subscribe', () => {
     expect(lookup).not.toHaveBeenCalled()
   })
 
+  it('sanitizes control characters out of a rejected relay URL before it is logged (audit finding L1)', async () => {
+    const { header } = await nip98Header(SUBSCRIBE_PATH, 'POST')
+    const warnSpy = vi.spyOn(console, 'warn').mockImplementation(() => {})
+    // wss://10.0.0.1 → SSRF-blocked (private IP, no DNS needed); the CRLF +
+    // fake log line would forge a second entry if logged raw.
+    const evilRelay = 'wss://10.0.0.1/\r\n[notifications/subscribe] pubkey=deadbeef mint=https://legit.example ADMIN OK\r\nwss://x/'
+
+    const res = await post(
+      SUBSCRIBE_PATH,
+      { mintUrl: 'https://mint.example.com', notifyOnDown: true, notifyOnUp: true, relays: [evilRelay] },
+      header,
+    )
+
+    expect(res.status).toBe(400)
+    const logged = warnSpy.mock.calls.map(c => c.join(' ')).join(' || ')
+    // The relay string WAS logged (for diagnosability) but with control chars
+    // replaced — no raw CR/LF/ANSI that could split or forge a log line.
+    expect(logged).toContain('10.0.0.1')
+    // eslint-disable-next-line no-control-regex
+    expect(logged).not.toMatch(/[\u0000-\u001f]/)
+    expect(logged).toContain('�')
+    warnSpy.mockRestore()
+  })
+
   describe('relay SSRF guard', () => {
     it.each([
       ['ws://127.0.0.1', 'loopback literal'],

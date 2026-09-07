@@ -295,6 +295,20 @@ const NIP46_RELAYS = ['wss://relay.damus.io', 'wss://nos.lol', 'wss://relay.prim
 const BUNKER_CONNECT_TIMEOUT_MS = 30_000
 const QR_PAIRING_TIMEOUT_MS = 120_000
 
+// NIP-46 `onauth`: the remote signer sends an approval URL and nostr-tools hands
+// it straight through — no validation. A malicious or compromised bunker could
+// return a phishing URL, a `javascript:`/`data:` URL, or (without noopener) one
+// that reverse-tabnabs the MintRadar tab via window.opener. So: only ever open
+// an https:// URL, and always with noopener,noreferrer. (2026-09-07 audit, L3.)
+// Exported for unit testing.
+export function openRemoteSignerAuthUrl(url: unknown): void {
+  if (typeof url === 'string' && /^https:\/\//i.test(url)) {
+    window.open(url, '_blank', 'noopener,noreferrer')
+  } else {
+    console.warn('[nip46] ignoring non-https auth URL from remote signer')
+  }
+}
+
 function installBunkerShim(signer: BunkerSigner, pubkeyHex: string): void {
   if (typeof window === 'undefined') return
   if (window.nostr !== undefined) {
@@ -370,7 +384,7 @@ export async function loginWithBunker(bunkerInput: string): Promise<NostrProfile
   const bp = await parseBunkerInput(bunkerInput)
   if (!bp) throw new Error('Invalid bunker URI or NIP-05 identifier')
   const signer = BunkerSigner.fromBunker(clientSecretKey, bp, {
-    onauth: (url) => window.open(url, '_blank'),
+    onauth: openRemoteSignerAuthUrl,
   })
   await Promise.race([
     signer.connect(),
@@ -420,7 +434,7 @@ export function initBunkerQR(): {
   const rawSigner = BunkerSigner.fromURI(
     clientSecretKey,
     uri,
-    { onauth: (url) => window.open(url, '_blank'), pool: pairingPool },
+    { onauth: openRemoteSignerAuthUrl, pool: pairingPool },
     abortCtrl.signal
   )
   // If the timeout wins the race below, fromURI still rejects on abort — keep
@@ -475,7 +489,7 @@ export async function restoreBunkerSession(): Promise<void> {
     const bp = await parseBunkerInput(storedUri)
     if (!bp) throw new Error('Invalid stored bunker URI')
     const signer = BunkerSigner.fromBunker(clientSecretKey, bp, {
-      onauth: (url) => window.open(url, '_blank'),
+      onauth: openRemoteSignerAuthUrl,
     })
     // Optimistic restore: shim installed before connect() resolves to allow
     // synchronous window.nostr access on page refresh. If connect() fails,
