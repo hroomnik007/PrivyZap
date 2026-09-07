@@ -180,6 +180,13 @@ export async function refreshAllMintReviews(): Promise<number> {
     ;(globalThis as any).WebSocket = WebSocket
   }
 
+  // Root nostr-tools SimplePool — connects via the plain `globalThis.WebSocket`
+  // above, NOT the connect-time DNS-pinned `DnsPinnedWebSocket` that
+  // nostrService.ts uses for the notification path. Safe ONLY because
+  // REVIEW_SYNC_RELAYS is a hardcoded constant with no attacker-controlled host.
+  // If a dynamic/user-supplied relay list is ever added here, move to the pinned
+  // pool ('nostr-tools/pool' SimplePool + useWebSocketImplementation) or this
+  // becomes an SSRF vector. See the matching note in discovery.ts.
   const nostrPool = new SimplePool()
   let updated = 0
   let failed = 0

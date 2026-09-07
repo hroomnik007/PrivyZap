@@ -331,7 +331,11 @@ export function AppShell() {
           ) : (
             <>
               <div className="navbar-profile">
-                {profile.picture !== undefined ? (
+                {/* https:// only — same guard as the other two profile.picture
+                    call sites (review list, "Signing with" row). This one is
+                    the logged-in user's own kind:0 so the risk is minimal, but
+                    keep it consistent (2026-09-07 audit hardening). */}
+                {profile.picture?.startsWith('https://') ? (
                   <img src={profile.picture} alt=""
                     className="navbar-avatar"
                     onError={(e) => { e.currentTarget.style.display = 'none' }}

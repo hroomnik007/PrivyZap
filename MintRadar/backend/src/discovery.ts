@@ -120,6 +120,15 @@ export async function discoverMintsFromNostr(): Promise<number> {
     // eslint-disable-next-line @typescript-eslint/no-explicit-any
     ;(globalThis as any).WebSocket = WebSocket
   }
+  // NOTE: this SimplePool is the ROOT nostr-tools one — it connects via the
+  // plain `globalThis.WebSocket` above, NOT the connect-time DNS-pinned
+  // `DnsPinnedWebSocket` that nostrService.ts installs for the notification
+  // relay path. That's fine ONLY because DISCOVERY_RELAYS is a hardcoded
+  // constant — there is no attacker-controlled relay host here. If a dynamic /
+  // user-supplied relay list is ever added to discovery, switch this to the
+  // pinned pool (import SimplePool + useWebSocketImplementation from
+  // 'nostr-tools/pool' and register DnsPinnedWebSocket) — otherwise it becomes
+  // an SSRF vector. Same caveat applies to reviewsSync.ts.
   const nostrPool = new SimplePool()
   // Opt into per-event relay attribution so the logs below can show which relay actually
   // served what. Off by default in nostr-tools; it only costs a Map of event id → relays

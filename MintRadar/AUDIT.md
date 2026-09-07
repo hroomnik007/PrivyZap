@@ -53,6 +53,13 @@
 
 ## 3. Dependency Vulnerabilities
 
+> **UPDATE 2026-09-07:** `npm audit` now reports **0 vulnerabilities in both trees**
+> (`/` frontend and `/backend`), and `npm audit --omit=dev` is also 0. The 6
+> remaining frontend items below were all the dev-server-only `esbuild <=0.24.2`
+> chain — resolved by the **Vite 5 → 8 upgrade** (Dependabot, mid-2026) plus the
+> `qs` 6.16.0 / `fast-uri` 3.1.7 bumps (commit `ff8d719`). The narrative below is
+> the state as of the original 2026-06-20 audit and is kept for history.
+
 ### Frontend (`/`)
 
 | Severity | Count (before) | Count (after fix) |
@@ -86,6 +93,7 @@ Affected packages (all transitive, same root): `vite`, `vite-plugin-pwa`, `vite-
 **Fixed** (`npm audit fix`): `undici <=6.26.0` (HTTP header injection, WebSocket DoS, response queue poisoning — GHSA-p88m-4jfj-68fv, GHSA-vxpw-j846-p89q, GHSA-35p6-xmwp-9g52, GHSA-g8m3-5g58-fq7m) and `esbuild` Windows file-read (GHSA-g7r4-m6w7-qqqr).
 
 **Status: BACKEND CLEAN. Frontend needs Vite v8 upgrade (non-urgent, dev-only CVE).**
+_(2026-09-07: the Vite v8 upgrade shipped — both trees are now at 0 vulnerabilities. See the UPDATE note at the top of this section.)_
 
 ---
 
@@ -229,7 +237,7 @@ Affected packages (all transitive, same root): `vite`, `vite-plugin-pwa`, `vite-
 
 ## Open Recommendations (No Code Change Made)
 
-1. **Vite v8 upgrade** — resolve remaining 6 frontend vulnerabilities (all dev-server only, low production risk). Test PWA plugin, routing, and build output after upgrading.
+1. ~~**Vite v8 upgrade** — resolve remaining 6 frontend vulnerabilities (all dev-server only, low production risk).~~ **DONE (2026-09-07):** Vite 8 shipped; `npm audit` is 0 in both trees.
 2. **Redis-backed rate limiting** — Current in-process rate limit stores reset on restart and don't share state across processes. If the backend ever scales horizontally, migrate to Redis.
 3. **nginx.conf re-deploy** — After updating nginx config on the VPS, verify headers with `curl -I https://mintradar.pedani.eu`.
 
