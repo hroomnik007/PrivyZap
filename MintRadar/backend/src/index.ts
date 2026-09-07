@@ -1197,6 +1197,20 @@ app.get('/api/mints/nostr-reviews', (req: Request, res: Response): void => {
 const MIN_RELAYS = 1
 const MAX_RELAYS = 10
 
+// Per-pubkey caps on the notification-subscription store. `notifySubscribers`
+// (nostrService.ts) fans a gift-wrap signed by NOTIFICATION_SERVICE_NSEC out to
+// (row.relays ∪ NOTIFICATION_RELAYS) for every matching row on a mint
+// transition. Without a total cap, one free pubkey could accumulate a
+// subscription row for every mint (each carrying up to 10 attacker-chosen relay
+// URLs), turning a flapping mint into amplified traffic toward arbitrary public
+// relays — and getting the service key rate-limited/banned, breaking
+// notifications for everyone. A real user watches single- to low-double-digit
+// mints and reuses one relay list across them, so these limits are far above
+// legitimate use. (The 30/hr rate limit bounds the *rate* of writes, not the
+// *total* — and pubkeys are free, so it isn't enough on its own.)
+const MAX_SUBSCRIPTIONS_PER_PUBKEY = 50
+const MAX_DISTINCT_RELAYS_PER_PUBKEY = 25
+
 // Validates the relay list shape and, for each entry, that it's a ws:/wss:
 // URL that passes the same SSRF guard used for mint probing (adapted for the
 // ws(s) scheme in ssrf.ts) — prevents a subscription from later being used to
@@ -1308,8 +1322,41 @@ app.post('/api/notifications/subscribe', (req: Request, res: Response): void => 
             return
           }
 
+          // Per-pubkey caps — one round-trip: current row count, whether THIS
+          // mint already has a row (an update, always allowed), and the set of
+          // relay URLs already stored for this pubkey's OTHER subscriptions.
           return pool.query(
-            `INSERT INTO notification_subscriptions (pubkey, mint_url, notify_on_down, notify_on_up, relays, updated_at)
+            `SELECT
+               (SELECT COUNT(*)::int FROM notification_subscriptions WHERE pubkey = $1) AS total,
+               (SELECT COUNT(*)::int FROM notification_subscriptions WHERE pubkey = $1 AND mint_url = $2) AS this_mint,
+               COALESCE(ARRAY(
+                 SELECT DISTINCT r FROM notification_subscriptions ns, unnest(ns.relays) AS r
+                 WHERE ns.pubkey = $1 AND ns.mint_url <> $2
+               ), '{}'::text[]) AS other_relays`,
+            [pubkey, mintUrl]
+          ).then(capRow => {
+            const { total, this_mint, other_relays } = capRow.rows[0] as {
+              total: number; this_mint: number; other_relays: string[]
+            }
+            const isNewRow = this_mint === 0
+
+            if (isNewRow && total >= MAX_SUBSCRIPTIONS_PER_PUBKEY) {
+              res.status(409).json({
+                error: `You already have ${MAX_SUBSCRIPTIONS_PER_PUBKEY} mint notification subscriptions, which is the maximum. Unsubscribe from one before adding another.`,
+              })
+              return
+            }
+
+            const distinctRelaysAfter = new Set([...other_relays, ...relays])
+            if (distinctRelaysAfter.size > MAX_DISTINCT_RELAYS_PER_PUBKEY) {
+              res.status(400).json({
+                error: `This subscription would push your notification relay list to ${distinctRelaysAfter.size} distinct relays across all your subscriptions; the maximum is ${MAX_DISTINCT_RELAYS_PER_PUBKEY}. Reuse the same relay list across your subscriptions.`,
+              })
+              return
+            }
+
+            return pool.query(
+              `INSERT INTO notification_subscriptions (pubkey, mint_url, notify_on_down, notify_on_up, relays, updated_at)
              VALUES ($1, $2, $3, $4, $5, now())
              ON CONFLICT (pubkey, mint_url) DO UPDATE SET
                notify_on_down = EXCLUDED.notify_on_down,
@@ -1317,11 +1364,12 @@ app.post('/api/notifications/subscribe', (req: Request, res: Response): void => 
                relays = EXCLUDED.relays,
                updated_at = now()`,
             [pubkey, mintUrl, notifyOnDown, notifyOnUp, relays]
-          ).then(() => {
-            // Audit trail: truncated pubkey + mint only — never relays/notify
-            // flags, which is the rest of the request body.
-            console.log(`[notifications/subscribe] pubkey=${pubkey.slice(0, 8)}… mint=${mintUrl}`)
-            res.json({ success: true })
+            ).then(() => {
+              // Audit trail: truncated pubkey + mint only — never relays/notify
+              // flags, which is the rest of the request body.
+              console.log(`[notifications/subscribe] pubkey=${pubkey.slice(0, 8)}… mint=${mintUrl}`)
+              res.json({ success: true })
+            })
           })
         })
       })

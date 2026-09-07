@@ -174,6 +174,7 @@ describe('POST /api/notifications/subscribe', () => {
     const { header, pubkey } = await nip98Header(SUBSCRIBE_PATH, 'POST')
     resolvesTo({ address: '1.2.3.4', family: 4 })
     query.mockResolvedValueOnce({ rowCount: 1, rows: [{}] }) // mint lookup hit
+    query.mockResolvedValueOnce({ rows: [{ total: 0, this_mint: 0, other_relays: [] }] }) // per-pubkey caps
     query.mockResolvedValueOnce({ rowCount: 1 }) // upsert
 
     const res = await post(
@@ -189,7 +190,7 @@ describe('POST /api/notifications/subscribe', () => {
 
     expect(res.status).toBe(200)
     expect(res.body).toEqual({ success: true })
-    const [sql, params] = query.mock.calls[1]
+    const [sql, params] = query.mock.calls[2]
     expect(sql).toContain('INSERT INTO notification_subscriptions')
     expect(sql).toContain('ON CONFLICT (pubkey, mint_url)')
     expect(params).toEqual([
@@ -298,6 +299,7 @@ describe('POST /api/notifications/subscribe', () => {
         return [{ address: '1.2.3.4', family: 4 }]
       })
       query.mockResolvedValueOnce({ rowCount: 1, rows: [{}] }) // mint lookup hit
+      query.mockResolvedValueOnce({ rows: [{ total: 0, this_mint: 0, other_relays: [] }] }) // per-pubkey caps
       query.mockResolvedValueOnce({ rowCount: 1 }) // upsert
 
       const res = await post(
@@ -309,7 +311,7 @@ describe('POST /api/notifications/subscribe', () => {
       expect(res.status).toBe(200)
       expect(res.body).toEqual({ success: true })
       // The unresolvable relay is still stored exactly as submitted.
-      const [, params] = query.mock.calls[1]
+      const [, params] = query.mock.calls[2]
       expect(params).toEqual([pubkey, 'https://mint.example.com', true, true, relays])
     })
 
@@ -391,6 +393,7 @@ describe('POST /api/notifications/subscribe', () => {
     const { header } = await nip98Header(SUBSCRIBE_PATH, 'POST')
     resolvesTo({ address: '1.2.3.4', family: 4 })
     query.mockResolvedValueOnce({ rowCount: 1, rows: [{}] })
+    query.mockResolvedValueOnce({ rows: [{ total: 0, this_mint: 0, other_relays: [] }] })
     query.mockResolvedValueOnce({ rowCount: 1 })
     const logSpy = vi.spyOn(console, 'log').mockImplementation(() => {})
 
@@ -408,6 +411,104 @@ describe('POST /api/notifications/subscribe', () => {
     const loggedLines = logSpy.mock.calls.map(c => c.join(' ')).join('\n')
     expect(loggedLines).not.toContain('secret-relay')
     logSpy.mockRestore()
+  })
+
+  // Per-pubkey caps — bound the notification-subscription store so one free
+  // pubkey can't accumulate a row (with up to 10 attacker-chosen relay URLs)
+  // for every mint and turn a flapping mint into amplified fan-out signed by
+  // NOTIFICATION_SERVICE_NSEC. The 30/hr rate limit only bounds the write rate.
+  describe('per-pubkey caps', () => {
+    // Mocks: [0] mint lookup, [1] caps query, [2] upsert (if reached).
+    function mockCaps(opts: { total?: number; thisMint?: number; otherRelays?: string[] }) {
+      query.mockResolvedValueOnce({ rowCount: 1, rows: [{}] }) // mint lookup hit
+      query.mockResolvedValueOnce({
+        rows: [{ total: opts.total ?? 0, this_mint: opts.thisMint ?? 0, other_relays: opts.otherRelays ?? [] }],
+      })
+      query.mockResolvedValueOnce({ rowCount: 1 }) // upsert (only consumed if the caps pass)
+    }
+
+    it('rejects the 51st distinct mint subscription with 409 and an actionable message', async () => {
+      const { header } = await nip98Header(SUBSCRIBE_PATH, 'POST')
+      resolvesTo({ address: '1.2.3.4', family: 4 })
+      mockCaps({ total: 50, thisMint: 0 })
+
+      const res = await post(
+        SUBSCRIBE_PATH,
+        { mintUrl: 'https://mint.example.com', notifyOnDown: true, notifyOnUp: true, relays: ['wss://relay.example.com'] },
+        header,
+      )
+
+      expect(res.status).toBe(409)
+      expect(res.body.error).toMatch(/50 mint notification subscriptions/)
+      expect(res.body.error).toMatch(/[Uu]nsubscribe/)
+      // The upsert must NOT have run.
+      expect(query.mock.calls.some(c => String(c[0]).includes('INSERT INTO notification_subscriptions'))).toBe(false)
+    })
+
+    it('still allows UPDATING an existing subscription when already at the row cap', async () => {
+      const { header } = await nip98Header(SUBSCRIBE_PATH, 'POST')
+      resolvesTo({ address: '1.2.3.4', family: 4 })
+      mockCaps({ total: 50, thisMint: 1 }) // this mint already has a row
+
+      const res = await post(
+        SUBSCRIBE_PATH,
+        { mintUrl: 'https://mint.example.com', notifyOnDown: false, notifyOnUp: true, relays: ['wss://relay.example.com'] },
+        header,
+      )
+
+      expect(res.status).toBe(200)
+      expect(query.mock.calls.some(c => String(c[0]).includes('INSERT INTO notification_subscriptions'))).toBe(true)
+    })
+
+    it('rejects a request that would push the pubkey past the distinct-relay cap with 400 and a clear message', async () => {
+      const { header } = await nip98Header(SUBSCRIBE_PATH, 'POST')
+      resolvesTo({ address: '1.2.3.4', family: 4 })
+      const existing = Array.from({ length: 20 }, (_, i) => `wss://existing-${i}.example.com`)
+      const fresh = Array.from({ length: 10 }, (_, i) => `wss://fresh-${i}.example.com`) // 20 + 10 = 30 distinct
+      mockCaps({ total: 5, thisMint: 0, otherRelays: existing })
+
+      const res = await post(
+        SUBSCRIBE_PATH,
+        { mintUrl: 'https://mint.example.com', notifyOnDown: true, notifyOnUp: true, relays: fresh },
+        header,
+      )
+
+      expect(res.status).toBe(400)
+      expect(res.body.error).toMatch(/30 distinct relays/)
+      expect(res.body.error).toMatch(/maximum is 25/)
+      expect(query.mock.calls.some(c => String(c[0]).includes('INSERT INTO notification_subscriptions'))).toBe(false)
+    })
+
+    it('accepts a request that reuses relays already stored for the pubkey (union stays under the cap)', async () => {
+      const { header } = await nip98Header(SUBSCRIBE_PATH, 'POST')
+      resolvesTo({ address: '1.2.3.4', family: 4 })
+      const existing = Array.from({ length: 25 }, (_, i) => `wss://existing-${i}.example.com`)
+      mockCaps({ total: 5, thisMint: 0, otherRelays: existing })
+
+      const res = await post(
+        SUBSCRIBE_PATH,
+        { mintUrl: 'https://mint.example.com', notifyOnDown: true, notifyOnUp: true, relays: existing.slice(0, 5) },
+        header,
+      )
+
+      expect(res.status).toBe(200)
+    })
+
+    it('scopes the cap query to the authenticated pubkey', async () => {
+      const { header, pubkey } = await nip98Header(SUBSCRIBE_PATH, 'POST')
+      resolvesTo({ address: '1.2.3.4', family: 4 })
+      mockCaps({ total: 0, thisMint: 0 })
+
+      await post(
+        SUBSCRIBE_PATH,
+        { mintUrl: 'https://mint.example.com', notifyOnDown: true, notifyOnUp: true, relays: ['wss://relay.example.com'] },
+        header,
+      )
+
+      const capCall = query.mock.calls.find(c => String(c[0]).includes('other_relays'))
+      expect(capCall).toBeDefined()
+      expect(capCall![1]).toEqual([pubkey, 'https://mint.example.com'])
+    })
   })
 })
 
