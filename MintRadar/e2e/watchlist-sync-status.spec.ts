@@ -56,17 +56,71 @@ async function loginWithRealKey(page: Page, sk: Uint8Array): Promise<{ pubkey: s
   return { pubkey }
 }
 
-function buildWatchlistEvent(sk: Uint8Array, urls: string[]) {
+function buildWatchlistEvent(sk: Uint8Array, urls: string[], createdAt = Math.floor(Date.now() / 1000)) {
   // Content is NIP-44 "encrypted" — the login mock's nip44 is an identity
   // function (encrypt/decrypt both return the text unchanged), so a plain
   // JSON string round-trips exactly like the real encrypted payload would.
   const template: EventTemplate = {
     kind: WATCHLIST_KIND,
-    created_at: Math.floor(Date.now() / 1000),
+    created_at: createdAt,
     tags: [],
     content: JSON.stringify(urls),
   }
   return finalizeEvent(template, sk)
+}
+
+/**
+ * kind:10003 relay mock where two named relays disagree: `staleRelayHost`
+ * answers FIRST (small delay) with an older revision, `freshRelayHost` answers
+ * slightly later with the newer one. Every other relay + every non-watchlist
+ * subscription gets an immediate EOSE. Used to prove fetchRemoteWatchlist picks
+ * the highest `created_at`, not the first responder (audit finding M5).
+ */
+async function mockDisagreeingWatchlistRelays(
+  page: Page,
+  opts: {
+    staleRelayHost: string
+    freshRelayHost: string
+    staleEvent: ReturnType<typeof buildWatchlistEvent>
+    freshEvent: ReturnType<typeof buildWatchlistEvent>
+    staleDelayMs?: number
+    freshDelayMs?: number
+  },
+): Promise<void> {
+  await page.routeWebSocket(/^wss:\/\//, ws => {
+    const host = (() => { try { return new URL(ws.url()).host } catch { return '' } })()
+    ws.onMessage(message => {
+      const data = typeof message === 'string' ? message : message.toString()
+      let parsed: unknown
+      try { parsed = JSON.parse(data) } catch { return }
+      if (!Array.isArray(parsed)) return
+      const [verb] = parsed as [string, ...unknown[]]
+
+      if (verb === 'EVENT') {
+        const id = (parsed[1] as { id?: string } | undefined)?.id ?? ''
+        ws.send(JSON.stringify(['OK', id, true, '']))
+        return
+      }
+      if (verb !== 'REQ') return
+      const [, subId, filter] = parsed as [string, string, { kinds?: number[] } | undefined]
+      const isWatchlistReq = filter?.kinds?.includes(WATCHLIST_KIND) ?? false
+      if (!isWatchlistReq) { ws.send(JSON.stringify(['EOSE', subId])); return }
+
+      if (host === opts.staleRelayHost) {
+        setTimeout(() => {
+          ws.send(JSON.stringify(['EVENT', subId, opts.staleEvent]))
+          ws.send(JSON.stringify(['EOSE', subId]))
+        }, opts.staleDelayMs ?? 30)
+      } else if (host === opts.freshRelayHost) {
+        setTimeout(() => {
+          ws.send(JSON.stringify(['EVENT', subId, opts.freshEvent]))
+          ws.send(JSON.stringify(['EOSE', subId]))
+        }, opts.freshDelayMs ?? 250)
+      } else {
+        ws.send(JSON.stringify(['EOSE', subId]))
+      }
+    })
+  })
 }
 
 /**
@@ -158,6 +212,33 @@ test.describe('Watchlist sync status', () => {
     // Sync concludes as genuinely empty (no error) — the empty state is now
     // legitimate, and no error banner should appear alongside it.
     await expect(page.getByText('No mints watched yet')).toBeVisible({ timeout: 4000 })
+    await expect(page.locator('.wl-sync-error-banner')).toHaveCount(0)
+  })
+
+  test('picks the newest kind:10003 across relays, not the first responder (audit finding M5)', async ({ page }) => {
+    const sk = generateSecretKey()
+    const now = Math.floor(Date.now() / 1000)
+    // relay.damus.io answers first with a STALE revision (Bravo only); nos.lol
+    // answers ~250ms later with the current one (Alpha + Delta). The old
+    // first-responder logic would have rolled the list back to just Bravo.
+    const staleEvent = buildWatchlistEvent(sk, ['https://bravo.mint.example'], now - 3600)
+    const freshEvent = buildWatchlistEvent(sk, ['https://alpha.mint.example', 'https://delta.mint.example'], now)
+    await mockDisagreeingWatchlistRelays(page, {
+      staleRelayHost: 'relay.damus.io',
+      freshRelayHost: 'nos.lol',
+      staleEvent,
+      freshEvent,
+    })
+    await installApiMocks(page)
+    await loginWithRealKey(page, sk)
+
+    await page.goto('/watchlist')
+
+    // The newer revision's mints render...
+    await expect(page.locator('.wl-grid .card-name', { hasText: 'Alpha Mint' })).toBeVisible({ timeout: 5000 })
+    await expect(page.locator('.wl-grid .card-name', { hasText: 'Delta Mint' })).toBeVisible()
+    // ...and the stale revision's mint does NOT.
+    await expect(page.locator('.wl-grid .card-name', { hasText: 'Bravo Mint' })).toHaveCount(0)
     await expect(page.locator('.wl-sync-error-banner')).toHaveCount(0)
   })
 

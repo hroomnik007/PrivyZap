@@ -53,6 +53,15 @@ export function useWatchlistSync() {
     console.log('sync: starting for pubkey', pubkey.slice(0, 8))
 
     const doSync = async () => {
+      // M4 (2026-09-07 security audit): `pubkey` is captured when this effect
+      // fired. Every await below yields the event loop, and the user can log out
+      // and a DIFFERENT user log in on the same device before it resumes. Writing
+      // user A's remote watchlist into Dexie / the store — or letting Phase 2
+      // re-publish it — while user B is now the active identity leaks A's private
+      // list and republishes it as B's own kind:10003. Re-check the live auth
+      // identity after every await and discard the result untouched if it changed.
+      const isStale = () => useAuthStore.getState().profile?.pubkey !== pubkey
+
       try {
         // Check if the Dexie data belongs to the current pubkey.
         // If a different user was previously logged in on this device, their Dexie
@@ -63,6 +72,8 @@ export function useWatchlistSync() {
           dexieOwner = ownerEntry?.value
         } catch { /* meta table not yet available on first run */ }
 
+        if (isStale()) { console.warn('sync: pubkey changed mid-sync — aborting before any Dexie write'); return }
+
         if (dexieOwner !== pubkey) {
           console.log('sync: different owner in Dexie — clearing before load')
           await db.watchlist.clear()
@@ -70,6 +81,11 @@ export function useWatchlistSync() {
 
         console.log('sync: fetching kind:10003 from relays')
         const { urls: remote, failed: remoteFetchFailed } = await fetchRemoteWatchlist(pubkey, userWriteRelaysRef.current)
+
+        if (isStale()) {
+          console.warn('sync: pubkey changed during fetchRemoteWatchlist — discarding result, no write/publish')
+          return
+        }
         if (import.meta.env.DEV) { console.log(`sync: decrypted ${remote.length} mints`, remote) }
 
         if (remote.length > 0) {
@@ -101,6 +117,9 @@ export function useWatchlistSync() {
         await db.meta.put({ key: WATCHLIST_OWNER_KEY, value: pubkey })
 
         await loadFromDb()
+
+        if (isStale()) { console.warn('sync: pubkey changed before commit — not marking synced / not publishing'); return }
+
         syncedForPubkey.current = pubkey
         setSyncStatus(remoteFetchFailed ? 'error' : 'done')
         console.log('sync: complete —', useWatchlistStore.getState().mints.length, 'mints in store')
@@ -111,12 +130,20 @@ export function useWatchlistSync() {
         // swallowed inside refreshAllSubscriptions itself.
         void refreshAllSubscriptions(userReadRelaysRef.current)
       } catch (err) {
+        if (isStale()) { console.warn('sync: error after pubkey change — ignoring', err); return }
         console.warn('sync: error during Phase 1:', err)
         // Mark complete even on error to avoid getting stuck; Phase 2 can resume
         syncedForPubkey.current = pubkey
         setSyncStatus('error')
       } finally {
-        isSyncing.current = false
+        // Only release the sync guard if this run still owns the active identity.
+        // A newer login for a different pubkey has already synchronously set its
+        // own isSyncing=true in the Phase 1 effect and manages its own lifecycle;
+        // clearing it here (this run started for the OLD pubkey) would let that
+        // newer run's Phase 2 publish race an incomplete sync.
+        if (useAuthStore.getState().profile?.pubkey === pubkey) {
+          isSyncing.current = false
+        }
       }
     }
 

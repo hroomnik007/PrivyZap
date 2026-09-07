@@ -35,7 +35,12 @@ export interface RemoteWatchlistResult {
   failed: boolean
 }
 
-const NO_EVENT_ERROR = 'no event'
+// Overall ceiling for the remote fetch (unchanged from the old Promise.race
+// timeout). Once the first valid event lands we only wait GRACE_AFTER_FIRST_MS
+// more for a possibly-newer revision from a slower relay, so the common case
+// stays well under the hard cap.
+const MAX_WAIT_MS = 3000
+const GRACE_AFTER_FIRST_MS = 1200
 
 export async function fetchRemoteWatchlist(pubkey: string, userWriteRelays?: string[] | null): Promise<RemoteWatchlistResult> {
   const pk = pubkey.slice(0, 8)
@@ -50,70 +55,98 @@ export async function fetchRemoteWatchlist(pubkey: string, userWriteRelays?: str
     ? [...new Set([...WATCHLIST_RELAYS, ...userWriteRelays])]
     : WATCHLIST_RELAYS
 
-  let responded = 0
   const total = relays.length
+  let responded = 0
+  const errors: unknown[] = []
+  const events: NostrEvent[] = []
 
+  // kind:10003 is a replaceable event: the authoritative copy is the one with the
+  // highest created_at. A lagging or malicious relay can still hold an OLDER
+  // revision, and the old code took whichever relay answered first — so a stale
+  // relay silently rolled the watchlist back, which Phase 2 then re-published as
+  // the newest state, wiping recently-added mints for good (2026-09-07 security
+  // audit, finding M5). Fix: COLLECT events across relays within the wait window
+  // and keep the newest, instead of racing for the first responder. (Same
+  // "validate then keep the right one" shape as subscribeFirstEvent's pubkey
+  // pinning in client.ts.)
+  let sawFirstEvent = false
+  let graceTimer: ReturnType<typeof setTimeout> | undefined
+  let resolveWait: (() => void) | undefined
+  const noteEvent = () => {
+    if (sawFirstEvent) return
+    sawFirstEvent = true
+    // Got at least one revision — only wait a short grace period for a possibly
+    // newer one from a slower relay, rather than the full MAX_WAIT_MS.
+    graceTimer = setTimeout(() => resolveWait?.(), GRACE_AFTER_FIRST_MS)
+  }
+
+  const relayQueries = relays.map(relay =>
+    sharedPool.querySync([relay], { kinds: [WATCHLIST_KIND], authors: [pubkey], limit: 1 })
+      .then(evs => {
+        // verifyEvent: signature self-consistent. pubkey === pubkey: the relay did
+        // not swap in someone else's event (it can ignore the authors filter).
+        const valid = evs.filter(e => verifyEvent(e) && e.pubkey === pubkey && !!e.content)
+        if (valid.length === 0) return
+        events.push(valid.reduce((a, b) => (b.created_at > a.created_at ? b : a)))
+        noteEvent()
+      })
+      .catch(err => { errors.push(err) })
+      .finally(() => { responded++ })
+  )
+
+  let hardCap: ReturnType<typeof setTimeout> | undefined
+  await new Promise<void>(resolve => {
+    resolveWait = resolve
+    hardCap = setTimeout(resolve, MAX_WAIT_MS)
+    void Promise.allSettled(relayQueries).then(() => resolve())
+  }).finally(() => {
+    if (graceTimer) clearTimeout(graceTimer)
+    if (hardCap) clearTimeout(hardCap)
+  })
+
+  if (events.length === 0) {
+    if (responded < total) {
+      console.warn(`[watchlist-sync] relay timeout after ${MAX_WAIT_MS}ms, ${responded}/${total} relays responded (pubkey=${pk}, method=${method})`)
+      return { urls: [], failed: true }
+    }
+    if (errors.length > 0) {
+      // At least one relay could not actually be queried (connection/protocol
+      // error) — surface that as a failure rather than "nothing to sync".
+      console.warn(`[watchlist-sync] relay fetch failed (pubkey=${pk}, method=${method}, ${responded}/${total} relays responded)`, errors[0])
+      return { urls: [], failed: true }
+    }
+    // Every relay was reached and none held a matching event — genuinely empty.
+    console.warn(`[watchlist-sync] remote list genuinely empty (kind:10003 not found or empty content) — no relay returned a valid event (pubkey=${pk}, method=${method}, ${responded}/${total} relays responded)`)
+    return { urls: [], failed: false }
+  }
+
+  const newest = events.reduce((a, b) => (b.created_at > a.created_at ? b : a))
+
+  let decrypted: string
   try {
-    // Query each relay independently — take the first one that returns an event
-    const relayQueries = relays.map(relay =>
-      sharedPool.querySync([relay], { kinds: [WATCHLIST_KIND], authors: [pubkey], limit: 1 })
-        .then(events => {
-          const validEvents = events.filter(e => verifyEvent(e))
-          if (!validEvents[0]?.content) throw new Error('no event')
-          return validEvents[0]
-        })
-        .finally(() => { responded++ })
-    )
-    const event = await Promise.race([
-      Promise.any(relayQueries),
-      new Promise<never>((_, reject) => setTimeout(() => reject(new Error('timeout')), 3000)),
-    ])
-
-    let decrypted: string
-    try {
-      decrypted = await window.nostr.nip44.decrypt(pubkey, event.content)
-    } catch (decryptErr) {
-      console.warn(`[watchlist-sync] decryption failed for event ${event.id} (pubkey=${pk}, method=${method})`, decryptErr)
-      return { urls: [], failed: true }
-    }
-
-    let parsed: unknown
-    try {
-      parsed = JSON.parse(decrypted)
-    } catch (parseErr) {
-      console.warn(`[watchlist-sync] decryption failed for event ${event.id} (pubkey=${pk}, method=${method}) — malformed JSON payload`, parseErr)
-      return { urls: [], failed: true }
-    }
-
-    if (!Array.isArray(parsed)) {
-      console.warn(`[watchlist-sync] remote list genuinely empty (kind:10003 not found or empty content) (pubkey=${pk}, method=${method})`)
-      return { urls: [], failed: false }
-    }
-    const urls = parsed.filter((u): u is string => typeof u === 'string')
-    if (urls.length === 0) {
-      console.warn(`[watchlist-sync] remote list genuinely empty (kind:10003 not found or empty content) (pubkey=${pk}, method=${method})`)
-    }
-    return { urls, failed: false }
-  } catch (err) {
-    if (err instanceof Error && err.message === 'timeout') {
-      console.warn(`[watchlist-sync] relay timeout after 3s, ${responded}/${total} relays responded (pubkey=${pk}, method=${method})`)
-      return { urls: [], failed: true }
-    }
-    // Promise.any rejected before the timeout — every relay query settled.
-    // If every rejection is our own deliberate "no event" (relay reached,
-    // just nothing matching), the remote list is genuinely empty rather than
-    // unreachable. Any other rejection reason (connection/protocol error)
-    // means at least one relay could not actually be queried — surface that
-    // as a failure instead of silently treating it as "nothing to sync".
-    const reasons = err instanceof AggregateError ? err.errors : [err]
-    const allGenuinelyEmpty = reasons.every(r => r instanceof Error && r.message === NO_EVENT_ERROR)
-    if (allGenuinelyEmpty) {
-      console.warn(`[watchlist-sync] remote list genuinely empty (kind:10003 not found or empty content) — no relay returned a valid event (pubkey=${pk}, method=${method}, ${responded}/${total} relays responded)`)
-      return { urls: [], failed: false }
-    }
-    console.warn(`[watchlist-sync] relay fetch failed (pubkey=${pk}, method=${method}, ${responded}/${total} relays responded)`, err)
+    decrypted = await window.nostr.nip44.decrypt(pubkey, newest.content)
+  } catch (decryptErr) {
+    console.warn(`[watchlist-sync] decryption failed for event ${newest.id} (pubkey=${pk}, method=${method})`, decryptErr)
     return { urls: [], failed: true }
   }
+
+  let parsed: unknown
+  try {
+    parsed = JSON.parse(decrypted)
+  } catch (parseErr) {
+    console.warn(`[watchlist-sync] decryption failed for event ${newest.id} (pubkey=${pk}, method=${method}) — malformed JSON payload`, parseErr)
+    return { urls: [], failed: true }
+  }
+
+  if (!Array.isArray(parsed)) {
+    console.warn(`[watchlist-sync] remote list genuinely empty (kind:10003 not found or empty content) (pubkey=${pk}, method=${method})`)
+    return { urls: [], failed: false }
+  }
+  const urls = parsed.filter((u): u is string => typeof u === 'string')
+  if (urls.length === 0) {
+    console.warn(`[watchlist-sync] remote list genuinely empty (kind:10003 not found or empty content) (pubkey=${pk}, method=${method})`)
+  }
+  return { urls, failed: false }
 }
 
 export async function publishWatchlist(pubkey: string, mints: string[], userWriteRelays?: string[] | null): Promise<void> {
