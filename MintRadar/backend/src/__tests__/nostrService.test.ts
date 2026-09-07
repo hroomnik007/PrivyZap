@@ -123,19 +123,28 @@ describe('publishServiceProfile', () => {
 
 describe('notifySubscribers', () => {
   const MINT = 'https://mint.example.com'
+  const CLAIMED_AT = new Date('2026-09-07T12:00:00.000Z')
 
-  it('queries by notify_on_down for a down transition', async () => {
+  function claimedRow(pubkey: string, relays: string[] | null = ['wss://relay.example.com']) {
+    return { pubkey, relays, claimed_at: CLAIMED_AT }
+  }
+
+  it('claims via a conditional UPDATE keyed on notify_on_down / last_notified_down_at for a down transition', async () => {
     const svc = await loadWithNsec(nip19.nsecEncode(generateSecretKey()))
     query.mockResolvedValueOnce({ rows: [] })
 
     await svc.notifySubscribers(MINT, 'down', new Date())
 
     const [sql, params] = query.mock.calls[0] as [string, unknown[]]
+    expect(sql).toMatch(/UPDATE notification_subscriptions/)
     expect(sql).toContain('notify_on_down = true')
+    expect(sql).toContain('last_notified_down_at = now()')
+    expect(sql).toMatch(/last_notified_down_at IS NULL OR last_notified_down_at < now\(\) - INTERVAL '60 minutes'/)
+    expect(sql).toContain('RETURNING pubkey, relays, last_notified_down_at AS claimed_at')
     expect(params).toEqual([MINT])
   })
 
-  it('queries by notify_on_up for an up transition', async () => {
+  it('uses the notify_on_up / last_notified_up_at columns for an up transition', async () => {
     const svc = await loadWithNsec(nip19.nsecEncode(generateSecretKey()))
     query.mockResolvedValueOnce({ rows: [] })
 
@@ -143,28 +152,24 @@ describe('notifySubscribers', () => {
 
     const [sql] = query.mock.calls[0] as [string, unknown[]]
     expect(sql).toContain('notify_on_up = true')
+    expect(sql).toContain('last_notified_up_at = now()')
   })
 
-  it('sends to a subscriber with no prior cooldown timestamp, then records it', async () => {
+  it('sends exactly one DM per claimed subscriber and issues no follow-up query on success', async () => {
     const svc = await loadWithNsec(nip19.nsecEncode(generateSecretKey()))
     const pubkey = getPublicKey(generateSecretKey())
-    query
-      .mockResolvedValueOnce({ rows: [{ pubkey, relays: ['wss://relay.example.com'], last_notified_at: null }] })
-      .mockResolvedValueOnce({ rowCount: 1 })
+    query.mockResolvedValueOnce({ rows: [claimedRow(pubkey)] })
 
     await svc.notifySubscribers(MINT, 'down', new Date())
 
     expect(publishMock).toHaveBeenCalledTimes(1)
-    const [sql, params] = query.mock.calls[1] as [string, unknown[]]
-    expect(sql).toContain('last_notified_down_at')
-    expect(params).toEqual([pubkey, MINT])
+    // Only the claiming UPDATE — no separate cooldown write, no release.
+    expect(query).toHaveBeenCalledTimes(1)
   })
 
-  it('blocks a second notification within the 60-minute cooldown window', async () => {
+  it('sends nothing when the claim matches no rows (cooldown still active / no subscribers)', async () => {
     const svc = await loadWithNsec(nip19.nsecEncode(generateSecretKey()))
-    const pubkey = getPublicKey(generateSecretKey())
-    const recent = new Date(Date.now() - 30 * 60 * 1000)
-    query.mockResolvedValueOnce({ rows: [{ pubkey, relays: ['wss://relay.example.com'], last_notified_at: recent }] })
+    query.mockResolvedValueOnce({ rows: [] })
 
     await svc.notifySubscribers(MINT, 'down', new Date())
 
@@ -172,50 +177,44 @@ describe('notifySubscribers', () => {
     expect(query).toHaveBeenCalledTimes(1)
   })
 
-  it('allows a notification once 60+ minutes have passed since the last one', async () => {
+  it('RACE: two concurrent notifySubscribers for the same transition send only ONE DM', async () => {
     const svc = await loadWithNsec(nip19.nsecEncode(generateSecretKey()))
     const pubkey = getPublicKey(generateSecretKey())
-    const old = new Date(Date.now() - 61 * 60 * 1000)
+    // The DB is the arbiter: the first conditional UPDATE claims the row; the
+    // second's WHERE no longer matches (cooldown just set) → zero rows.
     query
-      .mockResolvedValueOnce({ rows: [{ pubkey, relays: ['wss://relay.example.com'], last_notified_at: old }] })
-      .mockResolvedValueOnce({ rowCount: 1 })
+      .mockResolvedValueOnce({ rows: [claimedRow(pubkey)] })
+      .mockResolvedValueOnce({ rows: [] })
 
-    await svc.notifySubscribers(MINT, 'down', new Date())
+    await Promise.all([
+      svc.notifySubscribers(MINT, 'down', new Date()),
+      svc.notifySubscribers(MINT, 'down', new Date()),
+    ])
 
     expect(publishMock).toHaveBeenCalledTimes(1)
   })
 
-  it('simulated down→up→down flapping: a second down within 60min stays blocked', async () => {
+  it('down and up directions claim independent cooldown columns', async () => {
     const svc = await loadWithNsec(nip19.nsecEncode(generateSecretKey()))
     const pubkey = getPublicKey(generateSecretKey())
 
-    // t0: down, no prior cooldown → sent
-    query
-      .mockResolvedValueOnce({ rows: [{ pubkey, relays: ['wss://relay.example.com'], last_notified_at: null }] })
-      .mockResolvedValueOnce({ rowCount: 1 })
+    query.mockResolvedValueOnce({ rows: [claimedRow(pubkey)] })
     await svc.notifySubscribers(MINT, 'down', new Date())
     expect(publishMock).toHaveBeenCalledTimes(1)
 
-    // t0+10min: up transition uses an independent cooldown column
-    query
-      .mockResolvedValueOnce({ rows: [{ pubkey, relays: ['wss://relay.example.com'], last_notified_at: null }] })
-      .mockResolvedValueOnce({ rowCount: 1 })
+    // up transition — its own column, so it still claims even seconds later
+    query.mockResolvedValueOnce({ rows: [claimedRow(pubkey)] })
     await svc.notifySubscribers(MINT, 'up', new Date())
     expect(publishMock).toHaveBeenCalledTimes(2)
 
-    // t0+20min: down again, within 60min of the first down → still blocked
-    const recentDown = new Date(Date.now() - 20 * 60 * 1000)
-    query.mockResolvedValueOnce({ rows: [{ pubkey, relays: ['wss://relay.example.com'], last_notified_at: recentDown }] })
-    await svc.notifySubscribers(MINT, 'down', new Date())
-    expect(publishMock).toHaveBeenCalledTimes(2)
+    const upSql = query.mock.calls[1]![0] as string
+    expect(upSql).toContain('last_notified_up_at')
   })
 
   it('unions the subscriber relays with the NOTIFICATION_RELAYS fallback set', async () => {
     const svc = await loadWithNsec(nip19.nsecEncode(generateSecretKey()))
     const pubkey = getPublicKey(generateSecretKey())
-    query
-      .mockResolvedValueOnce({ rows: [{ pubkey, relays: ['wss://custom-relay.example.com'], last_notified_at: null }] })
-      .mockResolvedValueOnce({ rowCount: 1 })
+    query.mockResolvedValueOnce({ rows: [claimedRow(pubkey, ['wss://custom-relay.example.com'])] })
 
     await svc.notifySubscribers(MINT, 'down', new Date())
 
@@ -224,42 +223,44 @@ describe('notifySubscribers', () => {
     expect(relays).toContain('wss://relay.damus.io')
   })
 
-  it('does not update the cooldown timestamp when every relay publish fails', async () => {
+  it('RELEASES the claim (cooldown → NULL, guarded on the claimed timestamp) when every relay publish fails', async () => {
     publishMock.mockImplementation((relays: string[]) => relays.map(() => Promise.reject(new Error('fail'))))
     const svc = await loadWithNsec(nip19.nsecEncode(generateSecretKey()))
     const pubkey = getPublicKey(generateSecretKey())
-    query.mockResolvedValueOnce({ rows: [{ pubkey, relays: ['wss://relay.example.com'], last_notified_at: null }] })
+    query
+      .mockResolvedValueOnce({ rows: [claimedRow(pubkey)] })
+      .mockResolvedValueOnce({ rowCount: 1 }) // the release
 
     await svc.notifySubscribers(MINT, 'down', new Date())
 
-    expect(query).toHaveBeenCalledTimes(1)
+    expect(query).toHaveBeenCalledTimes(2)
+    const [releaseSql, releaseParams] = query.mock.calls[1] as [string, unknown[]]
+    expect(releaseSql).toContain('SET last_notified_down_at = NULL')
+    expect(releaseSql).toContain('last_notified_down_at = $3')
+    expect(releaseParams).toEqual([pubkey, MINT, CLAIMED_AT])
   })
 
-  it('one subscriber failing (malformed relays) does not prevent others from being notified', async () => {
+  it('one subscriber failing (malformed relays) does not stop the rest, and releases only the failed one', async () => {
     const svc = await loadWithNsec(nip19.nsecEncode(generateSecretKey()))
     const badPubkey = getPublicKey(generateSecretKey())
     const goodPubkey = getPublicKey(generateSecretKey())
     query
-      .mockResolvedValueOnce({
-        rows: [
-          { pubkey: badPubkey, relays: null, last_notified_at: null },
-          { pubkey: goodPubkey, relays: ['wss://relay.example.com'], last_notified_at: null },
-        ],
-      })
-      .mockResolvedValueOnce({ rowCount: 1 })
+      .mockResolvedValueOnce({ rows: [claimedRow(badPubkey, null), claimedRow(goodPubkey)] })
+      .mockResolvedValueOnce({ rowCount: 1 }) // release for the bad one
 
     await svc.notifySubscribers(MINT, 'down', new Date())
 
-    expect(publishMock).toHaveBeenCalledTimes(1)
+    expect(publishMock).toHaveBeenCalledTimes(1) // the good subscriber still got theirs
+    const [releaseSql, releaseParams] = query.mock.calls[1] as [string, unknown[]]
+    expect(releaseSql).toContain('= NULL')
+    expect(releaseParams).toEqual([badPubkey, MINT, CLAIMED_AT])
   })
 
   it('down message uses the plain hostname (no scheme) plus a URL-encoded MintRadar deep link', async () => {
     const recipientSecretKey = generateSecretKey()
     const pubkey = getPublicKey(recipientSecretKey)
     const svc = await loadWithNsec(nip19.nsecEncode(generateSecretKey()))
-    query
-      .mockResolvedValueOnce({ rows: [{ pubkey, relays: ['wss://relay.example.com'], last_notified_at: null }] })
-      .mockResolvedValueOnce({ rowCount: 1 })
+    query.mockResolvedValueOnce({ rows: [claimedRow(pubkey)] })
 
     await svc.notifySubscribers(MINT, 'down', new Date())
 
@@ -273,9 +274,7 @@ describe('notifySubscribers', () => {
     const recipientSecretKey = generateSecretKey()
     const pubkey = getPublicKey(recipientSecretKey)
     const svc = await loadWithNsec(nip19.nsecEncode(generateSecretKey()))
-    query
-      .mockResolvedValueOnce({ rows: [{ pubkey, relays: ['wss://relay.example.com'], last_notified_at: null }] })
-      .mockResolvedValueOnce({ rowCount: 1 })
+    query.mockResolvedValueOnce({ rows: [claimedRow(pubkey)] })
 
     await svc.notifySubscribers(MINT, 'up', new Date())
 
@@ -285,7 +284,7 @@ describe('notifySubscribers', () => {
     expect(rumor.content).toBe(`✅ mint.example.com is back online.\nView details: ${expectedUrl}`)
   })
 
-  it('never throws even if the initial DB query rejects', async () => {
+  it('never throws even if the claiming query rejects', async () => {
     const svc = await loadWithNsec(nip19.nsecEncode(generateSecretKey()))
     query.mockRejectedValueOnce(new Error('db down'))
 

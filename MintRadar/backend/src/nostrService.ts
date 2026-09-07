@@ -84,7 +84,10 @@ const NOTIFICATION_RELAYS = [
 ]
 
 const RELAY_PUBLISH_TIMEOUT_MS = 5_000
-const COOLDOWN_MS = 60 * 60 * 1000
+// Per-direction cooldown: at most one down-alert and one up-alert per subscriber
+// per mint per hour. Enforced atomically in SQL (see notifySubscribers) — a
+// constant so the interval literal in the query stays in one place.
+const COOLDOWN_MINUTES = 60
 
 let serviceSecretKey: Uint8Array | null = null
 
@@ -194,16 +197,23 @@ export async function publishLongFormArticle(params: {
   return { succeeded, failed }
 }
 
-interface SubscriberRow {
+interface ClaimedRow {
   pubkey: string
   relays: string[]
-  last_notified_at: Date | null
+  claimed_at: Date
 }
 
 // Fires the DM for a down/up transition to every subscriber with a matching
-// notify flag, respecting a 60-minute per-direction cooldown. Never throws —
-// every failure (query, per-subscriber send) is caught and logged so a
-// notification failure can never affect the probe loop that triggered it.
+// notify flag, respecting a per-direction hourly cooldown. Never throws — every
+// failure (query, per-subscriber send) is caught and logged so a notification
+// failure can never affect the probe loop that triggered it.
+//
+// The cooldown is enforced ATOMICALLY in SQL: a single conditional UPDATE claims
+// the cooldown slot (sets the timestamp to now() only where the cooldown has
+// actually elapsed) and RETURNs exactly the rows it claimed. Two overlapping
+// probe cycles racing on the same up/down transition can't both claim the same
+// subscriber — the loser's UPDATE matches zero rows — so at most one DM is sent.
+// (Replaces a race-prone SELECT-check → send → UPDATE sequence.)
 export async function notifySubscribers(mintUrl: string, direction: 'down' | 'up', checkedAt: Date): Promise<void> {
   if (!serviceSecretKey) return
   const secretKey = serviceSecretKey
@@ -212,13 +222,16 @@ export async function notifySubscribers(mintUrl: string, direction: 'down' | 'up
     const notifyColumn = direction === 'down' ? 'notify_on_down' : 'notify_on_up'
     const cooldownColumn = direction === 'down' ? 'last_notified_down_at' : 'last_notified_up_at'
 
-    const result = await pool.query(
-      `SELECT pubkey, relays, ${cooldownColumn} AS last_notified_at
-       FROM notification_subscriptions
-       WHERE mint_url = $1 AND ${notifyColumn} = true`,
+    const claimed = await pool.query(
+      `UPDATE notification_subscriptions
+          SET ${cooldownColumn} = now()
+        WHERE mint_url = $1
+          AND ${notifyColumn} = true
+          AND (${cooldownColumn} IS NULL OR ${cooldownColumn} < now() - INTERVAL '${COOLDOWN_MINUTES} minutes')
+       RETURNING pubkey, relays, ${cooldownColumn} AS claimed_at`,
       [mintUrl]
     )
-    const rows = result.rows as SubscriberRow[]
+    const rows = claimed.rows as ClaimedRow[]
     if (rows.length === 0) return
 
     const hostname = new URL(mintUrl).hostname
@@ -227,39 +240,42 @@ export async function notifySubscribers(mintUrl: string, direction: 'down' | 'up
       ? `⚠️ ${hostname} just went offline.\nView details: ${detailUrl}`
       : `✅ ${hostname} is back online.\nView details: ${detailUrl}`
 
+    // Release a claim whose DM never went out, so the next probe cycle can
+    // retry that subscriber. Guarded on the exact timestamp we set, so a
+    // concurrent successful claim is never clobbered. Reverting to NULL is
+    // safe — the claim query only matched rows whose cooldown had elapsed.
+    const releaseClaim = (pubkey: string, claimedAt: Date) =>
+      pool.query(
+        `UPDATE notification_subscriptions SET ${cooldownColumn} = NULL
+         WHERE pubkey = $1 AND mint_url = $2 AND ${cooldownColumn} = $3`,
+        [pubkey, mintUrl, claimedAt]
+      ).catch(err => console.error(`[notify] failed to release claim for ${pubkey.slice(0, 8)}…:`, err))
+
     let sent = 0
-    let cooldownSkipped = 0
     let failed = 0
 
     for (const row of rows) {
       try {
-        if (row.last_notified_at !== null && Date.now() - new Date(row.last_notified_at).getTime() < COOLDOWN_MS) {
-          cooldownSkipped++
-          continue
-        }
-
         const giftWrap = nip17.wrapEvent(secretKey, { publicKey: row.pubkey }, message)
         const targetRelays = [...new Set([...row.relays, ...NOTIFICATION_RELAYS])]
         const { succeeded } = await publishToRelays(targetRelays, giftWrap)
 
         if (succeeded > 0) {
-          await pool.query(
-            `UPDATE notification_subscriptions SET ${cooldownColumn} = now() WHERE pubkey = $1 AND mint_url = $2`,
-            [row.pubkey, mintUrl]
-          )
           sent++
         } else {
           failed++
+          await releaseClaim(row.pubkey, row.claimed_at)
         }
       } catch (err) {
         failed++
         console.error(`[notify] send error for mint=${mintUrl} pubkey=${row.pubkey.slice(0, 8)}…:`, err)
+        await releaseClaim(row.pubkey, row.claimed_at)
       }
     }
 
     console.log(
-      `[notify] sent ${direction}-alert (checked ${checkedAt.toISOString()}) for ${mintUrl} to ${rows.length} subscriber(s) ` +
-      `(${sent} succeeded, ${failed} failed, ${cooldownSkipped} cooldown-skipped)`
+      `[notify] ${direction}-alert (checked ${checkedAt.toISOString()}) for ${mintUrl}: ` +
+      `claimed ${rows.length}, ${sent} sent, ${failed} failed (claim released)`
     )
   } catch (err) {
     console.error(`[notify] notifySubscribers error for mint=${mintUrl}:`, err)
