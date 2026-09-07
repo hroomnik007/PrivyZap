@@ -450,9 +450,28 @@ export function initBunkerQR(): {
       }, QR_PAIRING_TIMEOUT_MS)
     }),
   ]).then(async signer => {
+    // The pairing can be cancelled (Cancel button / modal close → cancel()) or
+    // time out in the very tick the signer's connect-ack resolved this promise.
+    // Promise.race would still hand us the resolved signer — and installing the
+    // window.nostr shim + writing the bunker credentials to sessionStorage here
+    // would leave a live signer and silently re-log the user in on the next page
+    // load, after they believed they'd backed out. So bail on an aborted signal
+    // (re-checked after every await), tearing the signer down and committing NO
+    // state. (2026-09-07 security audit, L2.)
+    const bailIfAborted = async (): Promise<boolean> => {
+      if (!abortCtrl.signal.aborted) return false
+      try { await signer.close() } catch { /* already down */ }
+      // handedOff is still false → disposePool() in .finally destroys the pool.
+      return true
+    }
+    if (await bailIfAborted()) throw new DOMException('Pairing cancelled', 'AbortError')
+
+    const pubkeyHex = await signer.getPublicKey()
+    if (await bailIfAborted()) throw new DOMException('Pairing cancelled', 'AbortError')
+
+    // Commit — past this point the live signer owns the pool and the session.
     handedOff = true
     activeBunkerPool = pairingPool
-    const pubkeyHex = await signer.getPublicKey()
     installBunkerShim(signer, pubkeyHex)
     // Derive canonical bunker:// from signer.bp so restore doesn't reuse a one-time URI
     sessionStorage.setItem(BUNKER_URI_KEY, toBunkerURL(signer.bp))
