@@ -18,6 +18,7 @@ import {
   cardTrustLabel,
   cardLatencyLabel,
   cardLightningLabel,
+  resolveMintDetailUrl,
 } from '../utils/mintFormatting'
 
 const M = (method: string, unit = 'sat') => ({ method, unit, min_amount: 0, max_amount: 1000 })
@@ -603,5 +604,65 @@ describe('mintRiskLevel', () => {
   it('treats a missing trust score as 0 for an online mint (Medium, not a crash)', () => {
     expect(mintRiskLevel({ online: true, degraded: false, trustScore: null }).label).toBe('Medium risk')
     expect(mintRiskLevel({ online: true, degraded: false, trustScore: undefined }).label).toBe('Medium risk')
+  })
+})
+
+// ── resolveMintDetailUrl (bare-host /mint/:url collision fix) ──
+describe('resolveMintDetailUrl', () => {
+  const known = [
+    { url: 'https://21mint.me', online: true, trustScore: 70 },
+    { url: 'https://alpha.mint.example', online: true, trustScore: 92 },
+    { url: 'https://bitcoin.aleafnd.org/cashu', online: true, trustScore: 60 },
+    { url: 'https://btc.aleafnd.org/cashu', online: true, trustScore: 55 },
+  ]
+
+  it('passes an already-canonical tracked URL through untouched', () => {
+    expect(resolveMintDetailUrl('https://21mint.me', known)).toEqual({ kind: 'ok', url: 'https://21mint.me' })
+  })
+
+  it('redirects a bare host to the tracked https:// URL', () => {
+    expect(resolveMintDetailUrl('21mint.me', known)).toEqual({ kind: 'redirect', url: 'https://21mint.me' })
+  })
+
+  it('does not invent a trailing slash when canonicalising', () => {
+    const res = resolveMintDetailUrl('21mint.me', known)
+    expect(res.kind).toBe('redirect')
+    if (res.kind === 'redirect') expect(res.url).toBe('https://21mint.me')
+  })
+
+  it('redirects a bare host + trailing slash to the slash-less tracked URL', () => {
+    expect(resolveMintDetailUrl('21mint.me/', known)).toEqual({ kind: 'redirect', url: 'https://21mint.me' })
+  })
+
+  it('keeps two distinct hosts as two distinct pages', () => {
+    expect(resolveMintDetailUrl('bitcoin.aleafnd.org', known)).toEqual({ kind: 'redirect', url: 'https://bitcoin.aleafnd.org/cashu' })
+    expect(resolveMintDetailUrl('btc.aleafnd.org', known)).toEqual({ kind: 'redirect', url: 'https://btc.aleafnd.org/cashu' })
+  })
+
+  it('prefers a probed row over a never-probed NIP-87 stub on the same host', () => {
+    const withStub = [
+      { url: 'https://ghost.example', online: null, trustScore: null },   // NIP-87-only stub
+      { url: 'https://ghost.example/Bitcoin', online: true, trustScore: 68 }, // real tracked mint
+    ]
+    expect(resolveMintDetailUrl('ghost.example', withStub)).toEqual({ kind: 'redirect', url: 'https://ghost.example/Bitcoin' })
+  })
+
+  it('prefers the bare-root https://host row when it is probed', () => {
+    const rows = [
+      { url: 'https://h.example/Bitcoin', online: true, trustScore: 80 },
+      { url: 'https://h.example', online: true, trustScore: 50 },
+    ]
+    expect(resolveMintDetailUrl('h.example', rows)).toEqual({ kind: 'redirect', url: 'https://h.example' })
+  })
+
+  it('returns not-tracked (never a 3% ghost) for an unknown host', () => {
+    expect(resolveMintDetailUrl('totally-unknown.example', known)).toEqual({
+      kind: 'not-tracked', slug: 'totally-unknown.example', suggestion: null,
+    })
+  })
+
+  it('offers the closest known host as a suggestion on a near-miss', () => {
+    const res = resolveMintDetailUrl('mint.21mint.me', known)
+    expect(res).toEqual({ kind: 'not-tracked', slug: 'mint.21mint.me', suggestion: 'https://21mint.me' })
   })
 })

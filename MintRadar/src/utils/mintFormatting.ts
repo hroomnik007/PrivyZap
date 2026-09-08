@@ -15,6 +15,90 @@ export function mintHostname(url: string): string {
   try { return new URL(url).hostname } catch { return url }
 }
 
+// ── Mint-detail route param → tracked mint ─────────────────────
+// The /mint/:url route param can be a bare host ("21mint.me") pasted by a user,
+// not just the percent-encoded canonical URL the app links to
+// ("https%3A%2F%2F21mint.me"). Without canonicalisation a bare host never
+// matches a tracked row, so the page used to fall through to a hollow live-probe
+// stub (0 NUTs, ~3% Trust) instead of the real, tracked mint.
+export type MintDetailResolution =
+  | { kind: 'ok'; url: string }
+  | { kind: 'redirect'; url: string }
+  | { kind: 'not-tracked'; slug: string; suggestion: string | null }
+
+interface KnownMintLike { url: string; online?: boolean | null; trustScore?: number | null }
+
+function stripHostPrefix(host: string): string {
+  return host.replace(/^(?:www\.|mint\.)+/, '')
+}
+
+// Among several tracked rows on the same host, pick the one the Dashboard treats
+// as *the* mint: a row that has actually been probed (online !== null) beats a
+// never-probed NIP-87-only stub; then a bare-root https://host; then the higher
+// Trust Score; then the shorter (path-less) URL.
+function pickDashboardRow(rows: KnownMintLike[], host: string): KnownMintLike {
+  return [...rows].sort((a, b) => {
+    const aProbed = a.online != null ? 0 : 1
+    const bProbed = b.online != null ? 0 : 1
+    if (aProbed !== bProbed) return aProbed - bProbed
+    const aRoot = a.url === `https://${host}` ? 0 : 1
+    const bRoot = b.url === `https://${host}` ? 0 : 1
+    if (aRoot !== bRoot) return aRoot - bRoot
+    const at = a.trustScore ?? -1
+    const bt = b.trustScore ?? -1
+    if (at !== bt) return bt - at
+    return a.url.length - b.url.length
+  })[0]!
+}
+
+function closestKnownHostUrl(host: string, known: KnownMintLike[]): string | null {
+  const target = stripHostPrefix(host)
+  for (const m of known) {
+    const kh = mintHostname(m.url).toLowerCase()
+    if (stripHostPrefix(kh) === target || kh.endsWith('.' + host) || host.endsWith('.' + kh)) {
+      return m.url
+    }
+  }
+  return null
+}
+
+export function resolveMintDetailUrl(slug: string, known: KnownMintLike[]): MintDetailResolution {
+  const trimmed = slug.trim()
+
+  // 1. The slug is already an exact tracked URL (the canonical encoded form, or
+  //    a real http:// row) — render it as-is.
+  if (known.some(m => m.url === trimmed)) return { kind: 'ok', url: trimmed }
+
+  // 2. Canonicalise a bare host → https://host (keep any path; never append a
+  //    trailing slash — that would be a *different* URL / a second mint row) and
+  //    resolve by hostname. Hostname match is authoritative: among every tracked
+  //    row on that host, pickDashboardRow() chooses the one the Dashboard shows
+  //    — a probed row always beats a never-probed NIP-87-only stub, even the
+  //    stub that happens to be the exact bare-root URL.
+  const hasScheme = /^https?:\/\//i.test(trimmed)
+  const withScheme = hasScheme ? trimmed : `https://${trimmed}`
+
+  let host = ''
+  try { host = new URL(withScheme).hostname.toLowerCase() } catch { host = '' }
+
+  if (host) {
+    const hostMatches = known.filter(m => mintHostname(m.url).toLowerCase() === host)
+    if (hostMatches.length > 0) {
+      const best = pickDashboardRow(hostMatches, host)
+      return best.url === trimmed ? { kind: 'ok', url: best.url } : { kind: 'redirect', url: best.url }
+    }
+  } else {
+    // Slug isn't URL-parseable — last-ditch exact-match on the scheme-prefixed
+    // and trailing-slash-stripped forms.
+    const canonical = withScheme.replace(/\/+$/, '')
+    if (canonical !== trimmed && known.some(m => m.url === canonical)) return { kind: 'redirect', url: canonical }
+    if (withScheme !== trimmed && known.some(m => m.url === withScheme)) return { kind: 'redirect', url: withScheme }
+  }
+
+  // 3. Nothing tracked under this host — do not render a fake full detail.
+  return { kind: 'not-tracked', slug: trimmed, suggestion: host ? closestKnownHostUrl(host, known) : null }
+}
+
 // ── Mint display name ──────────────────────────────────────────
 // The name shown on cards, in the Name sort, and in the Compare picker.
 // A mint's `name` comes from its own untrusted /v1/info — many mints ship a

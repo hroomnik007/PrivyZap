@@ -88,3 +88,48 @@ test.describe('Mint Detail', () => {
     })
   }
 })
+
+test.describe('Mint Detail — /mint/:url canonicalisation (bare-host collision fix)', () => {
+  test.beforeEach(async ({ page }) => {
+    await mockRelays(page)
+    await installApiMocks(page)
+  })
+
+  test('a bare host redirects to the tracked mint (not a hollow stub)', async ({ page }) => {
+    await page.goto('/mint/alpha.mint.example')
+    // Ends on the canonical encoded URL the rest of the app links to…
+    await expect(page).toHaveURL(u => u.pathname === `/mint/${encodeURIComponent(ALPHA)}`)
+    // …showing the real tracked mint: full detail, online, real stats.
+    await expect(page.locator('.md-tabs')).toBeVisible()
+    await expect(page.getByText('Alpha Mint').first()).toBeVisible()
+    await expect(page.locator('.md-status-inline')).toContainText('Online')
+    await expect(page.locator('.md-summary').locator('.md-sc-value.green')).toHaveText('12')
+    await expect(page.locator('.md-not-tracked')).toHaveCount(0)
+  })
+
+  test('the canonical encoded URL still works directly', async ({ page }) => {
+    await page.goto(`/mint/${encodeURIComponent(ALPHA)}`)
+    await expect(page.locator('.md-tabs')).toBeVisible()
+    await expect(page.getByText('Alpha Mint').first()).toBeVisible()
+  })
+
+  test('two different hosts stay two different pages', async ({ page }) => {
+    await page.goto('/mint/alpha.mint.example')
+    await expect(page.getByText('Alpha Mint').first()).toBeVisible()
+    const alphaUrl = page.url()
+
+    await page.goto('/mint/bravo.mint.example')
+    await expect(page.getByText('Bravo Mint').first()).toBeVisible()
+    expect(page.url()).not.toBe(alphaUrl)
+  })
+
+  test('an unknown host shows the "Not a tracked mint" state, not a 3% ghost', async ({ page }) => {
+    await page.goto('/mint/definitely-not-a-real-mint.example')
+    await expect(page.locator('.md-not-tracked')).toBeVisible()
+    await expect(page.getByText('Not a tracked mint')).toBeVisible()
+    // No fake full detail: no tabs, no Trust gauge/score.
+    await expect(page.locator('.md-tabs')).toHaveCount(0)
+    await expect(page.locator('.md-sc-trust-num')).toHaveCount(0)
+    await expect(page.locator('.gauge-num')).toHaveCount(0)
+  })
+})

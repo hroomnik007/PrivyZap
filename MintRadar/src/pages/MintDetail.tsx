@@ -1,5 +1,5 @@
 import { nip19 } from 'nostr-tools'
-import { useParams, useNavigate } from 'react-router-dom'
+import { useParams, useNavigate, Navigate } from 'react-router-dom'
 import { useEffect, useState, useMemo, useRef, useCallback, type JSX } from 'react'
 import { useQuery } from '@tanstack/react-query'
 import { MintFavicon } from '@/components/mint/MintFavicon'
@@ -18,7 +18,7 @@ import { useAuthStore } from '@/stores/auth.store'
 import { ComparisonModal } from '@/components/ComparisonModal'
 import { MintComparePicker } from '@/components/MintComparePicker'
 import { InfoTooltip } from '@/components/InfoTooltip'
-import { displayName as mintDisplayName, isNewMint, firstSeenLabel, trustScoreColor, trustScoreInfo, formatTimeAgo, formatAuditErrorRatio, trustDonutArc, auditReliabilityColor, MIN_MEANINGFUL_REVIEWS } from '@/utils/mintFormatting'
+import { displayName as mintDisplayName, isNewMint, firstSeenLabel, trustScoreColor, trustScoreInfo, formatTimeAgo, formatAuditErrorRatio, trustDonutArc, auditReliabilityColor, MIN_MEANINGFUL_REVIEWS, mintHostname, resolveMintDetailUrl } from '@/utils/mintFormatting'
 import { TRACKED_NUTS } from '@/constants/nuts'
 import { isTestMint } from '@/constants/testMints'
 import { auditReliabilityScore, isAuditUnknown } from '@/utils/auditScore'
@@ -2279,12 +2279,52 @@ function MintDetailContent({ url }: { url: string }) {
   )
 }
 
+function safeDecode(raw: string): string | null {
+  try { return decodeURIComponent(raw) } catch { return null }
+}
+
+function MintNotTracked({ slug, suggestion }: { slug: string; suggestion: string | null }) {
+  const navigate = useNavigate()
+  return (
+    <div className="mint-detail">
+      <div className="md-header">
+        <button className="md-back" onClick={() => navigate(-1)}><span className="md-back-arrow">←</span><span className="md-back-label">Back</span></button>
+      </div>
+      <div className="md-not-tracked">
+        <div className="md-not-tracked-title">Not a tracked mint</div>
+        <p className="md-not-tracked-body">
+          MintRadar isn’t tracking <code>{slug}</code>. It may not be a Cashu mint, or it hasn’t been submitted yet.
+        </p>
+        {suggestion && (
+          <p className="md-not-tracked-suggest">
+            Did you mean{' '}
+            <button
+              type="button"
+              className="md-not-tracked-link"
+              onClick={() => navigate(`/mint/${encodeURIComponent(suggestion)}`, { replace: true })}
+            >
+              {mintHostname(suggestion)}
+            </button>
+            ?
+          </p>
+        )}
+        <p className="md-not-tracked-suggest">
+          <button type="button" className="md-not-tracked-link" onClick={() => navigate('/')}>Browse tracked mints →</button>
+        </p>
+      </div>
+    </div>
+  )
+}
+
 export default function MintDetail() {
   const params = useParams<{ url: string }>()
   const rawUrl = params['url']
   const navigate = useNavigate()
+  const { data: knownMintsData } = useKnownMints()
 
-  if (rawUrl === undefined) {
+  const slug = rawUrl === undefined ? null : safeDecode(rawUrl)
+
+  if (slug === null) {
     return (
       <div className="mint-detail">
         <div className="md-header">
@@ -2295,5 +2335,25 @@ export default function MintDetail() {
     )
   }
 
-  return <MintDetailContent url={decodeURIComponent(rawUrl)} />
+  // Need the tracked list before we can canonicalise a bare-host slug and decide
+  // between "redirect to the real mint" and "not tracked".
+  if (knownMintsData === undefined) {
+    return (
+      <div className="mint-detail">
+        <div className="md-header">
+          <button className="md-back" onClick={() => navigate(-1)}>← Back</button>
+        </div>
+      </div>
+    )
+  }
+
+  const resolution = resolveMintDetailUrl(slug, knownMintsData)
+  if (resolution.kind === 'redirect') {
+    return <Navigate to={`/mint/${encodeURIComponent(resolution.url)}`} replace />
+  }
+  if (resolution.kind === 'not-tracked') {
+    return <MintNotTracked slug={resolution.slug} suggestion={resolution.suggestion} />
+  }
+
+  return <MintDetailContent url={resolution.url} />
 }
