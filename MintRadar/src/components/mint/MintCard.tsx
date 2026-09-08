@@ -126,13 +126,22 @@ export function MintCard({
             <div className="card-name">{displayName}</div>
             {showHost && <div className="card-host">{hostname}</div>}
           </div>
-          {isOfflineDegraded ? (
-            <span style={{ fontSize: 10, fontFamily: 'var(--font-mono)', fontWeight: 600, color: 'var(--red)', background: 'var(--red-soft)', border: '1px solid rgba(219,106,93,0.3)', borderRadius: 5, padding: '2px 7px', flexShrink: 0, marginLeft: 'auto', marginRight: 12 }}>
-              Offline 24h+
-            </span>
-          ) : isNew && (
-            <span style={{ fontSize: 10, fontFamily: 'var(--font-mono)', fontWeight: 600, color: '#d3a446', background: 'rgba(211,164,70,.14)', border: '1px solid rgba(211,164,70,.3)', borderRadius: 5, padding: '2px 7px', flexShrink: 0, marginLeft: 'auto', marginRight: 12 }}>
-              New
+          {(isOfflineDegraded || isNew || isTestMint(mint.url)) && (
+            <span className="card-hdr-badges" style={{ display: 'flex', alignItems: 'center', gap: 4, flexShrink: 0, marginLeft: 'auto', marginRight: 12 }}>
+              {isOfflineDegraded ? (
+                <span className="card-hdr-badge" style={{ fontSize: 10, fontFamily: 'var(--font-mono)', fontWeight: 600, color: 'var(--red)', background: 'var(--red-soft)', border: '1px solid rgba(219,106,93,0.3)', borderRadius: 5, padding: '2px 7px' }}>
+                  Offline 24h+
+                </span>
+              ) : isNew && (
+                <span className="card-hdr-badge card-hdr-new" style={{ fontSize: 10, fontFamily: 'var(--font-mono)', fontWeight: 600, color: '#d3a446', background: 'rgba(211,164,70,.14)', border: '1px solid rgba(211,164,70,.3)', borderRadius: 5, padding: '2px 7px' }}>
+                  New
+                </span>
+              )}
+              {isTestMint(mint.url) && (
+                <span className="card-hdr-badge card-hdr-test-mint" style={{ fontSize: 10, fontFamily: 'var(--font-mono)', fontWeight: 600, color: 'var(--amber)', background: 'var(--amber-soft)', border: '1px solid var(--amber-soft-strong)', borderRadius: 5, padding: '2px 7px' }} title="Not for real funds — for testing and development only">
+                  🧪 Test mint
+                </span>
+              )}
             </span>
           )}
         </div>
@@ -188,11 +197,6 @@ export function MintCard({
                 text="This mint's review count grew unusually fast recently — worth a closer look before trusting the rating."
               />
             )}
-          </span>
-        )}
-        {isTestMint(mint.url) && (
-          <span className="card-pill" style={{ color: 'var(--amber)', background: 'var(--amber-soft)', border: '1px solid var(--amber-soft-strong)' }} title="Not for real funds — for testing and development only">
-            🧪 Test mint
           </span>
         )}
       </div>

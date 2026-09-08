@@ -6,8 +6,7 @@ type Page = import('@playwright/test').Page
 // Alpha Mint's URL is swapped for a real TEST_MINT_URLS entry (see
 // src/constants/testMints.ts) so isTestMint() fires and the 🧪 Test mint
 // badge renders. Other fields are overridden per-scenario to exercise
-// different combinations of the remaining badges (version, NUT count,
-// unit, uptime, Trust Score, Community Rating).
+// different combinations of the remaining badges.
 const TEST_MINT_URL = 'https://testnut.cashu.space'
 
 async function gotoWithAlphaAsTestMint(page: Page, overrides: Record<string, unknown>) {
@@ -18,19 +17,22 @@ async function gotoWithAlphaAsTestMint(page: Page, overrides: Record<string, unk
   await page.goto('/')
 }
 
-// The 🧪 Test mint badge must always be the LAST .card-pill on the card,
-// regardless of which other badges are present.
-async function expectTestMintBadgeLast(page: Page) {
+// The 🧪 Test mint badge lives in the card header slot (top-right, next to the
+// online dot) — NOT in the lower chip row.
+async function expectTestMintBadgeInHeader(page: Page) {
   const card = page.locator('.mint-card', { hasText: 'Alpha Mint' })
   await expect(card).toBeVisible()
-  const pills = card.locator('.card-pill')
-  await expect(pills.first()).toBeVisible()
-  const count = await pills.count()
-  expect(count).toBeGreaterThan(1) // sanity: other badges are actually present
-  await expect(pills.nth(count - 1)).toContainText('Test mint')
+
+  // In the header badge slot…
+  const headerBadge = card.locator('.card-name-row .card-hdr-test-mint')
+  await expect(headerBadge).toBeVisible()
+  await expect(headerBadge).toContainText('Test mint')
+
+  // …and NOT among the lower chip row.
+  await expect(card.locator('.card-pills .card-pill', { hasText: 'Test mint' })).toHaveCount(0)
 }
 
-test.describe('MintCard — Test mint badge always last', () => {
+test.describe('MintCard — Test mint badge lives in the header slot', () => {
   test('with all other badges present (version, NUTs, unit, uptime, trust, rating)', async ({ page }) => {
     await gotoWithAlphaAsTestMint(page, {
       version: 'Nutshell/0.16.0',
@@ -41,7 +43,7 @@ test.describe('MintCard — Test mint badge always last', () => {
       reviewCount: 12,
       reviewAvgRating: 4.2,
     })
-    await expectTestMintBadgeLast(page)
+    await expectTestMintBadgeInHeader(page)
   })
 
   test('without Community Rating badge', async ({ page }) => {
@@ -54,7 +56,7 @@ test.describe('MintCard — Test mint badge always last', () => {
       reviewCount: 0,
       reviewAvgRating: null,
     })
-    await expectTestMintBadgeLast(page)
+    await expectTestMintBadgeInHeader(page)
   })
 
   test('with only version and NUT count badges', async ({ page }) => {
@@ -67,21 +69,24 @@ test.describe('MintCard — Test mint badge always last', () => {
       reviewCount: 0,
       reviewAvgRating: null,
     })
-    await expectTestMintBadgeLast(page)
+    await expectTestMintBadgeInHeader(page)
   })
+})
 
-  test('with only Community Rating badge among the optional ones', async ({ page }) => {
-    await gotoWithAlphaAsTestMint(page, {
-      version: null,
-      nutCount: 0,
-      units: null,
-      uptimePct24h: null,
-      trustScore: null,
-      reviewCount: 5,
-      reviewAvgRating: 4.5,
-    })
-    await expectTestMintBadgeLast(page)
-  })
+test('New + Test mint sit side by side in the header slot when both apply', async ({ page }) => {
+  await mockRelays(page)
+  await installApiMocks(page)
+  // Alpha: test-mint URL + freshly discovered → both header badges.
+  const rows = MOCK_KNOWN_MINTS.map((m, i) =>
+    i === 0 ? { ...m, url: TEST_MINT_URL, discoveredAt: new Date().toISOString() } : m,
+  )
+  await page.route('**/api/mints/known', route => route.fulfill({ json: rows }))
+  await page.goto('/')
+
+  const slot = page.locator('.mint-card', { hasText: 'Alpha Mint' }).locator('.card-name-row .card-hdr-badges')
+  await expect(slot).toBeVisible()
+  await expect(slot.locator('.card-hdr-new')).toHaveText('New')
+  await expect(slot.locator('.card-hdr-test-mint')).toContainText('Test mint')
 })
 
 test('non-test mints never show the Test mint badge', async ({ page }) => {
@@ -89,5 +94,5 @@ test('non-test mints never show the Test mint badge', async ({ page }) => {
   await installApiMocks(page)
   await page.goto('/')
   const card = page.locator('.mint-card', { hasText: MOCK_MINTS[0]!.name })
-  await expect(card.locator('.card-pill', { hasText: 'Test mint' })).toHaveCount(0)
+  await expect(card.getByText('Test mint')).toHaveCount(0)
 })
