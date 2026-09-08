@@ -43,12 +43,17 @@ export function displayName(mint: { name?: string | null | undefined; url: strin
 // ── Favicon fallback initials ──────────────────────────────────
 // Two letters derived from the hostname, so a mint with no icon still gets a
 // distinct placeholder instead of the same generic glyph as every other one.
+// A leading "www." and/or "mint." is skipped first (case-insensitive, both
+// stripped if stacked) since those prefixes carry no distinguishing info —
+// e.g. "www.mint.example.com" and "mint.example.com" would otherwise both
+// render "MI" instead of the more useful "EX".
 export function mintFaviconInitials(url: string): string {
-  const host = mintHostname(url).replace(/^www\./, '')
-  const label = host.split('.')[0] ?? host
-  const alnum = label.replace(/[^a-z0-9]/gi, '')
-  if (alnum.length >= 2) return alnum.slice(0, 2).toUpperCase()
-  if (alnum.length === 1) return alnum.toUpperCase()
+  const host = mintHostname(url)
+    .toLowerCase()
+    .replace(/^www\./, '')
+    .replace(/^mint\./, '')
+  if (host.length >= 2) return host.slice(0, 2).toUpperCase()
+  if (host.length === 1) return host.toUpperCase()
   return '??'
 }
 

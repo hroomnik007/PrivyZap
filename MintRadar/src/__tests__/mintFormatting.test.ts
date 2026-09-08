@@ -153,17 +153,26 @@ describe('displayName', () => {
 
 // ── mintFaviconInitials ───────────────────────────────────────
 describe('mintFaviconInitials', () => {
-  it('takes the first two letters of the first hostname label, uppercased', () => {
+  it('takes the first two characters of the hostname, uppercased', () => {
     expect(mintFaviconInitials('https://minibits.cash')).toBe('MI')
-    expect(mintFaviconInitials('https://mint.example.com')).toBe('MI')
+    expect(mintFaviconInitials('https://mint.agorist.space')).toBe('AG')
+  })
+
+  it('strips a leading mint., digits allowed', () => {
+    expect(mintFaviconInitials('https://mint.21linz.at')).toBe('21')
   })
 
   it('strips a leading www.', () => {
     expect(mintFaviconInitials('https://www.coinos.io')).toBe('CO')
   })
 
+  it('strips both www. and mint. when stacked', () => {
+    expect(mintFaviconInitials('https://www.mint.example.com')).toBe('EX')
+  })
+
   it('handles numeric hosts', () => {
     expect(mintFaviconInitials('https://8333.space:3338')).toBe('83')
+    expect(mintFaviconInitials('https://8333.space')).toBe('83')
   })
 
   it('does not return the same value for two different mints', () => {
