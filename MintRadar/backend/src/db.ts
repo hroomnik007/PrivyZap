@@ -130,6 +130,10 @@ export async function initDb(): Promise<void> {
     'ALTER TABLE mints ADD COLUMN IF NOT EXISTS review_count INTEGER',
     'ALTER TABLE mints ADD COLUMN IF NOT EXISTS review_avg_rating REAL',
     'ALTER TABLE mints ADD COLUMN IF NOT EXISTS reviews_checked_at TIMESTAMPTZ',
+    // Rolling ~1-week-ago review_count snapshot — feeds the "recent review surge"
+    // sybil flag (reviewSurge.ts / reviewSurgeRollup.ts). Advanced once a day.
+    'ALTER TABLE mints ADD COLUMN IF NOT EXISTS review_count_7d_ago INTEGER',
+    'ALTER TABLE mints ADD COLUMN IF NOT EXISTS review_count_7d_ago_at TIMESTAMPTZ',
     'ALTER TABLE notification_subscriptions ADD COLUMN IF NOT EXISTS last_notified_down_at TIMESTAMPTZ',
     'ALTER TABLE notification_subscriptions ADD COLUMN IF NOT EXISTS last_notified_up_at TIMESTAMPTZ',
     // Version freshness grace period (see versionCatalog.ts's effectiveLatestVersions()):

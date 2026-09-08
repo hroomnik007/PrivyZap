@@ -124,6 +124,30 @@ describe('GET /api/mints/known', () => {
     expect(established.reviewWeightedRating).toBeCloseTo((99 / 107) * 4.7 + (8 / 107) * 4.58, 4)
   })
 
+  it('flags reviewSurge when review_count jumped sharply vs the ~1-week-ago snapshot', async () => {
+    const fourDaysAgo = new Date(Date.now() - 4 * 86_400_000).toISOString()
+    query.mockResolvedValueOnce({
+      rows: [
+        sampleRow({ url: 'https://surge.example', review_count: 28, review_avg_rating: 4.9, review_count_7d_ago: 3, review_count_7d_ago_at: fourDaysAgo }),
+        sampleRow({ url: 'https://organic.example', review_count: 22, review_avg_rating: 4.4, review_count_7d_ago: 20, review_count_7d_ago_at: fourDaysAgo }),
+        sampleRow({ url: 'https://nosnapshot.example', review_count: 40, review_avg_rating: 5.0, review_count_7d_ago: null, review_count_7d_ago_at: null }),
+      ],
+    })
+
+    const res = await request(app).get('/api/mints/known')
+    const byUrl = Object.fromEntries(res.body.map((m: { url: string }) => [m.url, m]))
+
+    expect(byUrl['https://surge.example'].reviewSurge).toBe(true)
+    expect(byUrl['https://organic.example'].reviewSurge).toBe(false)
+    expect(byUrl['https://nosnapshot.example'].reviewSurge).toBe(false)
+  })
+
+  it('reviewSurge defaults to false when the snapshot columns are absent', async () => {
+    query.mockResolvedValueOnce({ rows: [sampleRow()] })
+    const res = await request(app).get('/api/mints/known')
+    expect(res.body[0].reviewSurge).toBe(false)
+  })
+
   it('marks a long-offline mint as degraded', async () => {
     // last state offline, last probe >24h old → isStaleOffline → degraded
     query.mockResolvedValueOnce({

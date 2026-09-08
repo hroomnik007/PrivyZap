@@ -992,6 +992,16 @@ function MintDetailContent({ url }: { url: string }) {
                 iconSize={11}
                 text="Ratings come from self-published Nostr reviews (NIP-87). Anyone can create a new key, so a score can be artificially inflated — treat it as a directional signal, not proof."
               />
+              {knownMint?.reviewSurge && (
+                <InfoTooltip
+                  className="review-surge-flag"
+                  tone="warn"
+                  width={210}
+                  iconSize={11}
+                  label="Recent review surge"
+                  text="This mint's review count grew unusually fast recently — worth a closer look before trusting the rating."
+                />
+              )}
             </div>
             {tileReviewCount === null ? (
               <div className="md-sc-value sm" style={{color:'var(--text-faint)'}} aria-label="Loading reviews">…</div>

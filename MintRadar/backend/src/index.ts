@@ -14,6 +14,7 @@ import { fetchOgMintData, renderMintOgHtml } from './og.js'
 import { getMintIcon } from './mintIcon.js'
 import { computeTrustMovers, type MintScoreSnapshot } from './trustMovers.js'
 import { globalMeanRating, weightedRating } from './weightedRating.js'
+import { hasRecentReviewSurge } from './reviewSurge.js'
 import { isTestMint } from './testMints.js'
 
 let knownMintsCache: { data: unknown; expiresAt: number } | null = null
@@ -857,7 +858,7 @@ app.get('/api/mints/known', (_req: Request, res: Response): void => {
         m.audit_n_mints, m.audit_n_melts, m.audit_n_errors, m.audit_checked_at,
         m.audit_synced_at, m.audit_recent_total, m.audit_recent_errors,
         m.discovered_at, m.last_trust_score, m.last_error, m.server_location,
-        m.review_count, m.review_avg_rating,
+        m.review_count, m.review_avg_rating, m.review_count_7d_ago, m.review_count_7d_ago_at,
         COUNT(h.online) AS total,
         COALESCE(SUM(CASE WHEN h.online THEN 1 ELSE 0 END), 0) AS online_count,
         latest.online AS latest_online,
@@ -875,7 +876,7 @@ app.get('/api/mints/known', (_req: Request, res: Response): void => {
         m.audit_n_mints, m.audit_n_melts, m.audit_n_errors, m.audit_checked_at,
         m.audit_synced_at, m.audit_recent_total, m.audit_recent_errors,
         m.discovered_at, m.last_trust_score, m.last_error, m.server_location,
-        m.review_count, m.review_avg_rating,
+        m.review_count, m.review_avg_rating, m.review_count_7d_ago, m.review_count_7d_ago_at,
         latest.online, latest.latency_ms, latest.checked_at
     `)
     .then(result => {
@@ -923,6 +924,14 @@ app.get('/api/mints/known', (_req: Request, res: Response): void => {
           lastCheckedAt: (r.latest_checked_at as string | null) ?? null,
           reviewCount: (r.review_count as number | null) ?? null,
           reviewAvgRating: r.review_avg_rating != null ? Number(r.review_avg_rating) : null,
+          // Forgery-resistant sybil signal: the mint's review_count jumped
+          // sharply vs. the daily rollup's ~1-week-ago snapshot. Informational
+          // only — never feeds Trust Score or reviewWeightedRating.
+          reviewSurge: hasRecentReviewSurge({
+            reviewCount: (r.review_count as number | null) ?? null,
+            reviewCount7dAgo: (r.review_count_7d_ago as number | null) ?? null,
+            reviewCount7dAgoAt: (r.review_count_7d_ago_at as string | null) ?? null,
+          }),
           // IMDB-style weighted rating — used ONLY to order the Rating sort,
           // never displayed (the card badge keeps showing reviewAvgRating /
           // reviewCount). Kept out of reviewsSync's per-mint rollup because C is

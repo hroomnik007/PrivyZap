@@ -23,6 +23,8 @@ export interface MockMint {
   /** NIP-87 review rollup (backend 6h reviews sync). */
   reviewCount?: number | null
   reviewAvgRating?: number | null
+  /** "Recent review surge" sybil flag (backend/src/reviewSurge.ts). */
+  reviewSurge?: boolean
 }
 
 // Mirror of backend/src/weightedRating.ts for the Rating-sort fixture payload.
@@ -106,6 +108,7 @@ function knownMintPayload(m: MockMint) {
     reviewCount: m.reviewCount ?? null,
     reviewAvgRating: m.reviewAvgRating ?? null,
     reviewWeightedRating: mockWeightedRating(m, MOCK_GLOBAL_MEAN_RATING),
+    reviewSurge: m.reviewSurge ?? false,
   }
 }
 

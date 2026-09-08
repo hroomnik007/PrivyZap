@@ -88,6 +88,7 @@ PRIMARY KEY (url, pubkey)          -- one row per author per mint, newest wins
 ```
 Index: (url, created_at DESC). Populated by the 6h reviews sync (`backend/src/reviewsSync.ts`).
 Rollup columns on `mints`: `review_count INTEGER`, `review_avg_rating REAL`, `reviews_checked_at TIMESTAMPTZ`.
+`review_count_7d_ago INTEGER` + `review_count_7d_ago_at TIMESTAMPTZ` — rolling ~1-week-ago `review_count` snapshot, advanced once a day (`reviewSurgeRollup.ts`); feeds the informational "recent review surge" sybil flag (see Reviews Feature below).
 
 ## Backend API
 - GET /health — health check
@@ -157,6 +158,7 @@ by the Token Inspector's mint risk badge (`Tools.tsx`, see "Token Inspector" bel
 - Every 6h: NIP-87 discovery from 7 relays + audit.8333.space API → INSERT new mints, **then `refreshAllMintReviews()`** (`backend/src/reviewsSync.ts`): per-mint kind:38000 fetch (broad `REVIEW_SYNC_RELAYS`, 8s timeout, concurrency 3) → atomic per-mint replace of `mint_reviews` + `mints.review_count`/`review_avg_rating` rollup inside one transaction (READ COMMITTED: readers see old-complete or new-complete, never partial). Single-flight (`isReviewSyncRunning`).
 - Daily 3:15am: `pruneUnvalidatedMints()` — deletes rows discovered >24h ago that NEVER had a successful probe (covers any insert path that skips `isValidCashuMint()`).
 - Daily 3:45am: refresh `software_versions` cache from the GitHub Releases API (`cashubtc/nutshell`, `cashubtc/cdk`) — see Trust Score calculation above
+- Daily 4:45am: `refreshReviewSurgeBaseline()` (`backend/src/reviewSurgeRollup.ts`) — advances the rolling `review_count_7d_ago` snapshot for any mint whose snapshot is missing or ≥7 days old (skips mints whose `review_count` is still NULL, so the first reviews-sync never looks like a surge). Also primed 60s after boot. Single-flight, never throws. Feeds the `reviewSurge` field on `/api/mints/known`.
 - Daily 4:15am: `revalidateMints()` (`backend/src/prober.ts`) — **recurring Cashu-content revalidation** (fix for the "validate once at submit, then DNS/redirect-repoint anywhere" confused-deputy finding). Per mint, a STRONGER check than the 5-min probe: `/v1/info` must have a **non-empty** `nuts` object AND `/v1/keys` must return ≥1 keyset. Tri-state result — `ok` / `not-a-mint` / `unreachable`. `not-a-mint` (a repoint target: HTML page, redirect, `{"nuts":{}}` stub, 4xx) sets `mints.invalid_since = COALESCE(invalid_since, NOW())`; `ok` clears it; `unreachable` (5xx / timeout / DNS) leaves it untouched so a genuine multi-day outage never counts. The 5-min probe (`probeMintToDb`) also maintains `invalid_since` for the reachable-but-not-a-mint case (`lastError` ∈ {`Invalid Cashu response`, `Invalid JSON response`, `HTTP 4xx`}). Any mint with `invalid_since` older than **`REVALIDATION_REAP_DAYS` (7)** is `DELETE`d — removed from the probe rotation entirely, bounding the confused-deputy window from "forever" to ≤7 days. The 5-min probe already flips such a mint offline within minutes (dropping it from recommendations / marking it degraded); this job is what eventually removes it. **The lenient `isValidCashuMint()` submit/discovery gate is deliberately NOT tightened** — only this new sweep uses the stronger criteria, so an unusual-but-real mint is never rejected at submit time.
 
 ## Discovery pipeline
@@ -782,6 +784,24 @@ backed by fewer than `MIN_MEANINGFUL_REVIEWS` (3, in `mintFormatting.ts`) is de-
 (`opacity: 0.6` on the badge/value, "· too few to be reliable" on the tile sub-line) — this
 is display-only; the Rating *sort* handles thin samples via the m=8 Bayesian weighting in
 `backend/src/weightedRating.ts`. e2e: `e2e/community-rating-caveat.spec.ts`.
+
+**Recent review surge flag (2026-09-08, sybil Community Rating mitigation step 2 — "option D"):**
+`/api/mints/known` carries a `reviewSurge: boolean` per mint. It is **forgery-resistant** — it
+is NOT derived from the Nostr events (an attacker controls `created_at`, author keys, etc.),
+only from what MintRadar's own backend observed: the stored `review_count` now vs. a rolling
+~1-week-ago snapshot (`review_count_7d_ago` / `_at`, advanced daily — see Cron jobs). Logic in
+`backend/src/reviewSurge.ts` (`hasRecentReviewSurge`, unit-tested): flag when the count gained
+≥ `SURGE_ABSOLUTE_GAIN` (10) OR at least doubled from a base of ≥ `SURGE_RATIO_MIN_BASELINE`
+(5); false-safe on null / >14-day-stale snapshot. Tuned so ordinary organic growth (a few
+reviews a week) never trips it, only a sharp jump (e.g. 3→28 between sync cycles). Approach
+(b) from the analysis — one sliding snapshot column, not a history table — mirroring the
+`trust_score_7d_ago` rollup; rationale in `reviewSurgeRollup.ts`. **Informational only —
+never feeds Trust Score or `reviewWeightedRating`.** Frontend: `InfoTooltip` gained a
+`tone="warn"` variant (quiet amber ⚠ instead of ⓘ); rendered next to the Community Rating on
+the Mint Detail tile (`.review-surge-flag`) and mint card ★ badge (`.card-review-surge-flag`)
+with the text "This mint's review count grew unusually fast recently — worth a closer look
+before trusting the rating." 7-day warm-up after deploy (baselines seed to current count on
+the first rollup, can't flag until they've aged). e2e in the same spec above.
 
 ## Mint Probe — Degraded/Offline Detection
 

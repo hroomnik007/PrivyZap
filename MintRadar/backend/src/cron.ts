@@ -4,6 +4,7 @@ import { getKnownMints, probeMintToDb, pruneOldHistory, pruneUnvalidatedMints, r
 import { discoverMintsFromNostr, discoverMintsFromApi } from './discovery.js'
 import { refreshAllMintReviews } from './reviewsSync.js'
 import { refreshTrustMoversRollup } from './trustMoversRollup.js'
+import { refreshReviewSurgeBaseline } from './reviewSurgeRollup.js'
 import { pruneOldNotificationSubscriptions } from './db.js'
 import { publishServiceProfile } from './nostrService.js'
 import { fetchLatestUpstreamVersions } from './versionCatalog.js'
@@ -109,6 +110,19 @@ export function startCron(): void {
     await publishServiceProfile()
   })
 
+  // Advance the rolling ~1-week-ago review_count snapshot every day at 4:45am —
+  // feeds the informational "recent review surge" flag (reviewSurge.ts). Runs
+  // after the 6h reviews sync has had all night to populate review_count.
+  cron.schedule('45 4 * * *', async () => {
+    try {
+      await refreshReviewSurgeBaseline()
+    } catch (err) {
+      if (process.env['NODE_ENV'] !== 'production') {
+        console.error('[cron] review surge baseline error:', err)
+      }
+    }
+  })
+
   // Refresh the software_versions cache (latest Nutshell/cdk releases from GitHub)
   // every day at 3:45am — feeds versionFreshnessScore (shared/trustScore.ts).
   cron.schedule('45 3 * * *', async () => {
@@ -145,6 +159,10 @@ export function startCron(): void {
   // Prime the Trust Score Movers rollup shortly after boot so a fresh
   // deploy/restart serves real data before the first 5-minute probe tick.
   setTimeout(() => { void refreshTrustMoversRollup() }, 15_000)
+  // Seed / advance the review-count baseline shortly after boot too. review_count
+  // persists across restarts, so on a normal redeploy most mints already have a
+  // value and get their baseline set without waiting for the 4:45am slot.
+  setTimeout(() => { void refreshReviewSurgeBaseline() }, 60_000)
   setInterval(async () => {
     console.log('[cron] running scheduled discovery...')
     await discoverMintsFromNostr()

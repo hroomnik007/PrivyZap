@@ -36,6 +36,11 @@ export interface KnownMint {
   // (backend/src/reviewsSync.ts). Null until that sync has run for the mint.
   reviewCount?: number | null
   reviewAvgRating?: number | null
+  // Forgery-resistant sybil signal: the backend saw this mint's review_count
+  // jump sharply vs. its own ~1-week-ago snapshot (backend/src/reviewSurge.ts).
+  // Informational only — never affects Trust Score or the Rating sort; the UI
+  // shows a quiet ⚠ next to the Community Rating.
+  reviewSurge?: boolean
   // IMDB-style weighted/Bayesian rating computed by the backend
   // (backend/src/weightedRating.ts). Used ONLY for the Rating sort so a mint
   // with one 5.0 review doesn't outrank a mint with many reviews at 4.7 — never

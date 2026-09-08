@@ -174,6 +174,16 @@ export function MintCard({
               iconSize={10}
               text="Community ratings are self-published Nostr events (NIP-87). Anyone can create a new key to inflate a score — treat it as a directional signal, not proof."
             />
+            {mint.reviewSurge && (
+              <InfoTooltip
+                className="card-review-surge-flag"
+                tone="warn"
+                width={200}
+                iconSize={10}
+                label="Recent review surge"
+                text="This mint's review count grew unusually fast recently — worth a closer look before trusting the rating."
+              />
+            )}
           </span>
         )}
         {isTestMint(mint.url) && (

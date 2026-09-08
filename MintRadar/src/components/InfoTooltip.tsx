@@ -1,5 +1,5 @@
 import { useRef } from 'react'
-import { Info } from 'lucide-react'
+import { Info, AlertTriangle } from 'lucide-react'
 import { useTapTooltip } from '@/hooks/useTapTooltip'
 import './InfoTooltip.css'
 
@@ -14,14 +14,21 @@ export function InfoTooltip({
   width = 220,
   iconSize = 12,
   className,
+  tone = 'info',
+  label,
 }: {
   text: string
   width?: number
   iconSize?: number
   className?: string
+  // 'warn' swaps the ⓘ for a quiet amber ⚠ — used for soft advisory signals
+  // (e.g. the recent-review-surge flag) that shouldn't read as neutral help.
+  tone?: 'info' | 'warn'
+  label?: string
 }) {
   const ref = useRef<HTMLSpanElement>(null)
   const tooltip = useTapTooltip(ref)
+  const Icon = tone === 'warn' ? AlertTriangle : Info
   return (
     <span
       ref={ref}
@@ -29,8 +36,15 @@ export function InfoTooltip({
       onPointerEnter={tooltip.onPointerEnter}
       onPointerLeave={tooltip.onPointerLeave}
       onClick={tooltip.onClick}
+      aria-label={label}
+      role={label ? 'button' : undefined}
+      tabIndex={label ? 0 : undefined}
     >
-      <Info size={iconSize} color="#6b7280" style={{ flexShrink: 0, cursor: 'help', display: 'block' }} />
+      <Icon
+        size={iconSize}
+        color={tone === 'warn' ? 'var(--amber)' : '#6b7280'}
+        style={{ flexShrink: 0, cursor: 'help', display: 'block' }}
+      />
       {tooltip.open && (
         <span className="info-tooltip-pop" role="tooltip" style={{ width }}>
           {text}
