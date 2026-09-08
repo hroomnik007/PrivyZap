@@ -54,24 +54,60 @@ export function _resetMintIconCache(): void {
   cache.clear()
 }
 
+// TEMP DIAGNOSTIC (2026-09-08, favicon-regression investigation — REMOVE after root
+// cause is confirmed, see mint-favicon-regression task thread). Logs the exact reason
+// a favicon fetch was rejected, since a rejection here is what makes the frontend fall
+// back to the monogram placeholder.
+function logIconFetchFailure(mintUrl: string, iconUrl: string | null, reason: string): void {
+  console.warn(`[mint-icon-diag] mint=${mintUrl} icon_url=${iconUrl ?? '(none)'} reason=${reason}`)
+}
+
 async function fetchMintIcon(mintUrl: string): Promise<MintIcon | null> {
   const result = await pool.query('SELECT icon_url FROM mints WHERE url = $1', [mintUrl])
-  if (result.rows.length === 0) return null // not a known mint — refuse to proxy
+  if (result.rows.length === 0) {
+    logIconFetchFailure(mintUrl, null, 'unknown-mint')
+    return null // not a known mint — refuse to proxy
+  }
 
   const iconUrl = result.rows[0]?.['icon_url'] as string | null | undefined
-  if (typeof iconUrl !== 'string' || !iconUrl.startsWith('https://')) return null
+  if (typeof iconUrl !== 'string' || !iconUrl.startsWith('https://')) {
+    logIconFetchFailure(mintUrl, iconUrl ?? null, 'no-valid-https-icon-url')
+    return null
+  }
 
-  const res = await safeFetch(iconUrl, { timeoutMs: 5_000 })
-  if (!res || !res.ok) return null
+  let fetchErr: unknown = null
+  const res = await safeFetch(iconUrl, { timeoutMs: 5_000, onError: (err) => { fetchErr = err } })
+  if (!res || !res.ok) {
+    if (fetchErr) {
+      logIconFetchFailure(mintUrl, iconUrl, `network-error error=${String(fetchErr)}`)
+    } else if (!res) {
+      // safeFetch returns null with no captured exception for: the pre-fetch SSRF
+      // check (isSafeUrl) failing, a DNS lookup failure, or exceeding MAX_REDIRECTS
+      // (3) — it doesn't currently distinguish these itself.
+      logIconFetchFailure(mintUrl, iconUrl, 'fetch-blocked-or-unreachable (ssrf-blocked / dns-error / redirect-limit-exceeded)')
+    } else {
+      logIconFetchFailure(mintUrl, iconUrl, `non-2xx-status status=${res.status}`)
+    }
+    return null
+  }
 
   const contentType = (res.headers.get('content-type') ?? '').split(';')[0]!.trim().toLowerCase()
-  if (!ALLOWED_CONTENT_TYPES.has(contentType)) return null
+  if (!ALLOWED_CONTENT_TYPES.has(contentType)) {
+    logIconFetchFailure(mintUrl, iconUrl, `content-type-mismatch contentType=${contentType || '(missing)'}`)
+    return null
+  }
 
   const declaredLen = Number(res.headers.get('content-length') ?? '0')
-  if (Number.isFinite(declaredLen) && declaredLen > MAX_ICON_BYTES) return null
+  if (Number.isFinite(declaredLen) && declaredLen > MAX_ICON_BYTES) {
+    logIconFetchFailure(mintUrl, iconUrl, `oversize-content-length declaredLen=${declaredLen}`)
+    return null
+  }
 
   const body = Buffer.from(await res.arrayBuffer())
-  if (body.byteLength === 0 || body.byteLength > MAX_ICON_BYTES) return null
+  if (body.byteLength === 0 || body.byteLength > MAX_ICON_BYTES) {
+    logIconFetchFailure(mintUrl, iconUrl, body.byteLength === 0 ? 'empty-body' : `oversize-body bytes=${body.byteLength}`)
+    return null
+  }
 
   return { body, contentType }
 }
