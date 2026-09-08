@@ -7,7 +7,8 @@ import { TrustMoversPanel } from '@/components/stats/TrustMoversPanel'
 import { MintFavicon } from '@/components/mint/MintFavicon'
 import { useKnownMints, type KnownMint } from '@/hooks/useKnownMints'
 import { TRACKED_NUTS, NUT_META } from '@/constants/nuts'
-import { trustColor, trustScoreInfo, trustDonutArc } from '@/utils/mintFormatting'
+import { trustColor, trustScoreInfo, trustDonutArc, displayName } from '@/utils/mintFormatting'
+import { isTestMint } from '@/constants/testMints'
 import { computeGeoDistribution } from '@/utils/geoDistribution'
 import { useTapTooltip } from '@/hooks/useTapTooltip'
 import { useIsMobile } from '@/hooks/useIsMobile'
@@ -84,7 +85,7 @@ function NutMintsModal({ nutId, nutMeta, mints, onClose }: {
     if (!search.trim()) return mints
     const q = search.toLowerCase()
     return mints.filter(m => {
-      const name = (m.name ?? getHostname(m.url)).toLowerCase()
+      const name = displayName(m).toLowerCase()
       return name.includes(q) || m.url.toLowerCase().includes(q)
     })
   }, [mints, search])
@@ -117,7 +118,7 @@ function NutMintsModal({ nutId, nutMeta, mints, onClose }: {
             <div key={m.url} className="nut-modal-row">
               <MintFavicon url={m.url} iconUrl={m.iconUrl} size={22} />
               <div className="nut-modal-row-info">
-                <span className="nut-modal-row-name">{m.name ?? getHostname(m.url)}</span>
+                <span className="nut-modal-row-name">{displayName(m)}</span>
                 <span className="nut-modal-row-url">{getHostname(m.url)}</span>
               </div>
               <span
@@ -202,7 +203,7 @@ function VersionMintsView({ sw, ver, mints, onBack, onClose }: {
               >
                 <span style={{ width: 8, height: 8, borderRadius: '50%', background: m.online === true ? '#17E87F' : '#E24B4A', display: 'inline-block', flexShrink: 0 }} />
                 <div className="nut-modal-row-info" style={{ flex: 1 }}>
-                  <span className="nut-modal-row-name" style={{ color: 'var(--accent)', textDecoration: 'underline' }}>{m.name ?? getHostname(m.url)}</span>
+                  <span className="nut-modal-row-name" style={{ color: 'var(--accent)', textDecoration: 'underline' }}>{displayName(m)}</span>
                   {badge && (
                     <span className="nut-modal-row-badge" style={{ fontSize: 9, fontFamily: 'var(--font-mono)', color: badge.color, background: badge.bg, border: `1px solid ${badge.border}`, borderRadius: 4, padding: '1px 5px', marginLeft: 6 }}>{badge.label}</span>
                   )}
@@ -383,7 +384,7 @@ function CityMintsModal({ loc, mints, onClose }: {
                   style={{ width: 8, height: 8, borderRadius: '50%', background: m.online === true ? 'var(--green-bright)' : 'var(--red)', display: 'inline-block', flexShrink: 0 }}
                 />
                 <div className="nut-modal-row-info" style={{ flex: 1, flexDirection: 'row', alignItems: 'center', gap: 6 }}>
-                  <span className="nut-modal-row-name">{m.name ?? getHostname(m.url)}</span>
+                  <span className="nut-modal-row-name">{displayName(m)}</span>
                   {badge && (
                     <span style={{ fontSize: 9, fontFamily: 'var(--font-mono)', color: badge.color, background: badge.bg, border: `1px solid ${badge.border}`, borderRadius: 4, padding: '1px 5px' }}>{badge.label}</span>
                   )}
@@ -795,10 +796,19 @@ export default function Stats() {
       onlinePct * 0.30 + avgTrust * 0.25 + diversity * 0.15 + advancedAdoption * 0.15 + stability * 0.15
     )
 
+    // Matches NetworkHealthComponentRow's own points formula so the tooltip's
+    // numbers can never drift from what the row actually displays.
+    const onlinePts = Math.round(onlinePct * 30 / 100)
+
     return {
       score,
       components: [
-        { label: 'Online mints', value: onlinePct, weight: 30, tooltip: 'Share of tracked mints that responded online at their last probe.' },
+        {
+          label: 'Online mints',
+          value: onlinePct,
+          weight: 30,
+          tooltip: `${onlinePts}/30 are NHI points (this row is 30% of the index), not ${onlinePts} mints online. Dashboard listed/online counts are a different set.`,
+        },
         { label: 'Avg. Trust Score', value: avgTrust, weight: 25, tooltip: 'Average Trust Score across all currently online mints.' },
         { label: 'Software diversity', value: diversity, weight: 15, tooltip: 'How spread out mint software versions are across the network (Herfindahl-Hirschman based) — a network dominated by one version scores lower.' },
         { label: 'Advanced feature adoption', value: advancedAdoption, weight: 15, tooltip: 'Average adoption rate of optional, security/privacy-oriented NUTs (P2PK, DLEQ, HTLCs, WebSocket, auth, BOLT12, Nostr backup, Pay-to-BK, on-chain) beyond the baseline mint/melt/state-check/restore lifecycle.' },
@@ -847,6 +857,7 @@ export default function Stats() {
           <div>
             <div className="smc-label">Mints Tracked</div>
             <div className="smc-value">{data.totalMints}</div>
+            <div className="smc-sub">all known</div>
           </div>
         </div>
         <div className="stats-metric-card">
@@ -856,6 +867,7 @@ export default function Stats() {
           <div>
             <div className="smc-label">Online Now</div>
             <div className="smc-value">{data.onlineMints} / {data.totalMints}</div>
+            <div className="smc-sub">of all known</div>
           </div>
         </div>
         <div className="stats-metric-card">
@@ -883,6 +895,7 @@ export default function Stats() {
             <div className="smc-value" style={{color: avgUptime24h != null ? uptimeColor(avgUptime24h) : undefined}}>
               {avgUptime24h != null ? `${avgUptime24h}%` : '—'}
             </div>
+            <div className="smc-sub">across all known (offline pulls it down)</div>
           </div>
         </div>
         <div className="stats-metric-card">
@@ -892,6 +905,7 @@ export default function Stats() {
           <div>
             <div className="smc-label">Median Latency</div>
             <div className="smc-value">{data.avgLatency24h != null ? `${data.avgLatency24h} ms` : '—'}</div>
+            <div className="smc-sub">from Frankfurt</div>
           </div>
         </div>
         <div className="stats-metric-card">
@@ -1028,9 +1042,12 @@ export default function Stats() {
                     <span className="stats-top5-rank">#{idx+1}</span>
                     <MintFavicon url={mint.url} iconUrl={mint.iconUrl} size={22} />
                     <div style={{flex:1,minWidth:0}}>
-                      <div style={{fontSize:12,fontWeight:500,color:'var(--text)',whiteSpace:'nowrap',overflow:'hidden',textOverflow:'ellipsis'}}>{mint.name ?? hostname}</div>
+                      <div style={{fontSize:12,fontWeight:500,color:'var(--text)',whiteSpace:'nowrap',overflow:'hidden',textOverflow:'ellipsis'}}>{displayName(mint)}</div>
                       <div style={{fontSize:10,color:'var(--text3)',fontFamily:'var(--font-mono)',whiteSpace:'nowrap',overflow:'hidden',textOverflow:'ellipsis'}}>{hostname}</div>
                     </div>
+                    {isTestMint(mint.url) && (
+                      <span style={{fontSize:9,fontFamily:'var(--font-mono)',color:'var(--amber)',background:'var(--amber-soft)',border:'1px solid var(--amber-soft-strong)',borderRadius:4,padding:'1px 5px',flexShrink:0}} title="Not for real funds — for testing and development only">🧪 Test</span>
+                    )}
                     <span style={{fontSize:12,fontFamily:'var(--font-mono)',fontWeight:700,color,flexShrink:0}}>{uptime}%</span>
                   </div>
                 )
@@ -1047,9 +1064,12 @@ export default function Stats() {
                     <span className="stats-top5-rank">#{idx+1}</span>
                     <MintFavicon url={mint.url} iconUrl={mint.iconUrl} size={22} />
                     <div style={{flex:1,minWidth:0}}>
-                      <div style={{fontSize:12,fontWeight:500,color:'var(--text)',whiteSpace:'nowrap',overflow:'hidden',textOverflow:'ellipsis'}}>{mint.name ?? hostname}</div>
+                      <div style={{fontSize:12,fontWeight:500,color:'var(--text)',whiteSpace:'nowrap',overflow:'hidden',textOverflow:'ellipsis'}}>{displayName(mint)}</div>
                       <div style={{fontSize:10,color:'var(--text3)',fontFamily:'var(--font-mono)',whiteSpace:'nowrap',overflow:'hidden',textOverflow:'ellipsis'}}>{hostname}</div>
                     </div>
+                    {isTestMint(mint.url) && (
+                      <span style={{fontSize:9,fontFamily:'var(--font-mono)',color:'var(--amber)',background:'var(--amber-soft)',border:'1px solid var(--amber-soft-strong)',borderRadius:4,padding:'1px 5px',flexShrink:0}} title="Not for real funds — for testing and development only">🧪 Test</span>
+                    )}
                     <span style={{fontSize:12,fontFamily:'var(--font-mono)',fontWeight:700,color,flexShrink:0}}>{score}%</span>
                   </div>
                 )
@@ -1084,7 +1104,7 @@ export default function Stats() {
                     <Info size={11} color="#6b7280" style={{ flexShrink: 0, cursor: 'help' }} />
                     {nhiInfoTooltip.open && (
                       <div className="audit-tooltip" style={isMobile ? { width: 220, left: 0 } : { width: 260, right: 0 }}>
-                        Composite 0-100 score across uptime, average Trust Score, software diversity, advanced feature adoption &amp; network stability.{isMobile ? ' Tap the gauge for the full breakdown.' : ` ${NETWORK_HEALTH_FORMULA_TEXT}`}
+                        Composite 0-100 score across uptime, average Trust Score, software diversity, advanced feature adoption &amp; network stability. Each row below shows index points, not a mint count.{isMobile ? ' Tap the gauge for the full breakdown.' : ` ${NETWORK_HEALTH_FORMULA_TEXT}`}
                       </div>
                     )}
                   </span>
@@ -1189,7 +1209,7 @@ export default function Stats() {
           loading={moversLoading}
           refreshing={moversRefreshing}
           onMintClick={url => navigate(`/mint/${encodeURIComponent(url)}`)}
-          getDisplayName={m => m.name ?? getHostname(m.url)}
+          getDisplayName={m => displayName(m)}
           getIconUrl={m => knownMintsData?.find(km => km.url === m.url)?.iconUrl ?? null}
         />
 
