@@ -55,9 +55,13 @@
 
 .grid-score-explainer {
   margin: 12px var(--page-pad) 0;
-  font-size: 12px;
-  line-height: 1.5;
-  color: var(--text-dim);
+  font-size: 13.5px;
+  line-height: 1.45;
+  font-weight: 500;
+  color: var(--t2);
+}
+@media (max-width: 600px) {
+  .grid-score-explainer { font-size: 13px; }
 }
 
 .stat-icon {

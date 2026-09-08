@@ -97,8 +97,21 @@ test.describe('MintCard — copy & reduced badge set', () => {
     await page.goto('/')
     const explainer = page.locator('.grid-score-explainer')
     await expect(explainer).toHaveCount(1)
-    await expect(explainer).toContainText(
-      /Trust is our operational score.*Stars are community reviews — read both/,
-    )
+    await expect(explainer).toHaveText('We score how it runs. They score how it went. You pick.')
+    // Readable size: ~13–14px, not the 12px muted-caption tier.
+    const fontSize = await explainer.evaluate(el => parseFloat(getComputedStyle(el).fontSize))
+    expect(fontSize).toBeGreaterThanOrEqual(13)
+  })
+
+  test('known-count is consistent: All Known tile === grid footer "of N"', async ({ page }) => {
+    await page.goto('/')
+    await expect(page.locator('.mint-card')).toHaveCount(4)
+    const bar = page.locator('.stats-bar')
+    const tile = (await bar.locator('.stat-card', { hasText: 'All Known' }).locator('.stat-value').textContent())?.trim()
+    const footer = await page.locator('.grid-showing-note').textContent()
+    const footerN = footer?.match(/of (\d+)/)?.[1]
+    expect(footerN).toBe(tile)
+    // 4 mock mints, none degraded → "Showing 4 of 4", tile "4".
+    expect(footerN).toBe('4')
   })
 })

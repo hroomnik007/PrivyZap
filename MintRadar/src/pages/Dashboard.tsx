@@ -8,7 +8,6 @@ import { useNostrDiscovery } from '@/hooks/useNostrDiscovery'
 import { useWatchlistNotifications } from '@/hooks/useWatchlistNotifications'
 import { useUserRelays } from '@/hooks/useUserRelays'
 import { MintFavicon } from '@/components/mint/MintFavicon'
-import { useNostrMints } from '@/hooks/useNostrMints'
 import { useKnownMints, type KnownMint } from '@/hooks/useKnownMints'
 
 import type { MintStatus } from '@core/mint/api'
@@ -336,7 +335,7 @@ function MintListView({
           </tbody>
         </table>
       </div>
-      <div style={{ fontSize: 13, color: 'var(--text3)', textAlign: 'center', marginTop: 16, fontFamily: 'var(--font-mono)' }}>
+      <div className="grid-showing-note" style={{ fontSize: 13, color: 'var(--text3)', textAlign: 'center', marginTop: 16, fontFamily: 'var(--font-mono)' }}>
         Showing {sortedFiltered.length} of {totalAll || sortedFiltered.length}
       </div>
     </>
@@ -404,7 +403,7 @@ function MintGrid({
           />
         ))}
       </div>
-      <div style={{fontSize:13,color:'var(--text3)',textAlign:'center',marginTop:16,fontFamily:'var(--font-mono)'}}>
+      <div className="grid-showing-note" style={{fontSize:13,color:'var(--text3)',textAlign:'center',marginTop:16,fontFamily:'var(--font-mono)'}}>
         Showing {sortedFiltered.length} of {totalAll || sortedFiltered.length}
       </div>
     </>
@@ -495,8 +494,13 @@ export default function Dashboard() {
   const [bulkDone, setBulkDone] = useState(false)
 
   const queryClient = useQueryClient()
+  // Client-side NIP-87 discovery POSTs newly-announced mint URLs to
+  // /api/mints/discover, where the backend validates + probes them before they
+  // enter the `mints` table. We deliberately do NOT merge raw, unvalidated Nostr
+  // announcements into the grid or the counts — the single source of truth for
+  // "how many mints we track" is /api/mints/known, which is exactly what
+  // /api/stats counts too (both are an unfiltered `SELECT ... FROM mints`).
   useNostrDiscovery()
-  const { mints: nostrMints } = useNostrMints()
   const { data: knownMintsData, isLoading: knownLoading, error: knownError } = useKnownMints()
 
   const statusRecord = useMemo(() => {
@@ -521,22 +525,17 @@ export default function Dashboard() {
   // would AND against the hidden set and return nothing.
   const effectiveShowDegraded = showDegraded || activeFilters.status === 'offline'
 
-  const { degradedCount, allMints, totalAllCount } = useMemo(() => {
+  // The full set of mints we track — matches the "All Known" tile and
+  // /api/stats `totalMints` (all three read the same unfiltered mints table).
+  const knownTotal = knownMintsData?.length ?? 0
+
+  const { degradedCount, allMints } = useMemo(() => {
     const degradedUrls = knownMintsData?.filter(m => m.degraded).map(m => m.url) ?? []
-    const knownMintUrlSet = new Set(knownMintsData?.map(m => m.url) ?? [])
-    const degradedSetLocal = new Set(degradedUrls)
-    const nostrOnly = nostrMints.filter(m => !knownMintUrlSet.has(m.url))
     return {
       degradedCount: degradedUrls.length,
-      totalAllCount: (knownMintsData?.length ?? 0) + nostrOnly.length,
-      allMints: [
-        ...(knownMintsData?.filter(m => effectiveShowDegraded ? true : !m.degraded) ?? []),
-        ...nostrOnly
-          .filter(m => effectiveShowDegraded || !degradedSetLocal.has(m.url))
-          .map((m): KnownMint => ({ url: m.url, name: null, iconUrl: null, degraded: false, online: null, latencyMs: null, version: null, nutCount: null, tosUrl: null, descriptionLong: null, nutsLimits: null, auditNMints: null, auditNMelts: null, auditNErrors: null, auditCheckedAt: null })),
-      ] as KnownMint[],
+      allMints: (knownMintsData?.filter(m => effectiveShowDegraded ? true : !m.degraded) ?? []) as KnownMint[],
     }
-  }, [knownMintsData, nostrMints, effectiveShowDegraded])
+  }, [knownMintsData, effectiveShowDegraded])
 
   const filteredMints = useMemo(() => {
     return applyFilters(allMints, activeFilters)
@@ -825,7 +824,7 @@ export default function Dashboard() {
           <div className="stat-icon gray"><IcGrid /></div>
           <div>
             <div className="stat-label">All Known</div>
-            <div className="stat-value">{knownMintsData?.length ?? 0}</div>
+            <div className="stat-value">{knownTotal}</div>
             <div className="stat-sub">incl. offline</div>
           </div>
         </button>
@@ -917,7 +916,7 @@ export default function Dashboard() {
       </div>
 
       <p className="grid-score-explainer">
-        Trust is our operational score (uptime, protocol, software, audit). Stars are community reviews — read both.
+        We score how it runs. They score how it went. You pick.
       </p>
 
       {showFilters && (
@@ -994,7 +993,7 @@ export default function Dashboard() {
               search={search}
               sortBy={sortBy}
               sortDir={sortDir}
-              totalAll={!effectiveShowDegraded && degradedCount > 0 ? totalAllCount : 0}
+              totalAll={knownTotal}
             />
           ) : (
             <MintGrid
@@ -1003,7 +1002,7 @@ export default function Dashboard() {
               sortBy={sortBy}
               sortDir={sortDir}
               onCompare={openComparePicker}
-              totalAll={!effectiveShowDegraded && degradedCount > 0 ? totalAllCount : 0}
+              totalAll={knownTotal}
             />
           )}
           {degradedCount > 0 && activeFilters.status !== 'offline' && (
