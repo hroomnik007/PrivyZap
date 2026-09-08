@@ -17,7 +17,8 @@ import { useWatchlistStore } from '@/stores/watchlist.store'
 import { useAuthStore } from '@/stores/auth.store'
 import { ComparisonModal } from '@/components/ComparisonModal'
 import { MintComparePicker } from '@/components/MintComparePicker'
-import { mintAgeBadge, trustScoreColor, trustScoreInfo, formatTimeAgo, formatAuditErrorRatio, trustDonutArc, auditReliabilityColor } from '@/utils/mintFormatting'
+import { InfoTooltip } from '@/components/InfoTooltip'
+import { mintAgeBadge, trustScoreColor, trustScoreInfo, formatTimeAgo, formatAuditErrorRatio, trustDonutArc, auditReliabilityColor, MIN_MEANINGFUL_REVIEWS } from '@/utils/mintFormatting'
 import { TRACKED_NUTS } from '@/constants/nuts'
 import { isTestMint } from '@/constants/testMints'
 import { auditReliabilityScore, isAuditUnknown } from '@/utils/auditScore'
@@ -983,7 +984,15 @@ function MintDetailContent({ url }: { url: string }) {
         <div className="md-sc">
           <div className="md-sc-icon orange"><Star size={14} /></div>
           <div style={{flex:1}}>
-            <div className="md-sc-label">Community rating</div>
+            <div className="md-sc-label" style={{display:'flex',alignItems:'center',gap:4}}>
+              Community rating
+              <InfoTooltip
+                className="community-rating-info"
+                width={210}
+                iconSize={11}
+                text="Ratings come from self-published Nostr reviews (NIP-87). Anyone can create a new key, so a score can be artificially inflated — treat it as a directional signal, not proof."
+              />
+            </div>
             {tileReviewCount === null ? (
               <div className="md-sc-value sm" style={{color:'var(--text-faint)'}} aria-label="Loading reviews">…</div>
             ) : tileReviewCount === 0 ? (
@@ -991,14 +1000,20 @@ function MintDetailContent({ url }: { url: string }) {
             ) : (
               <>
                 {tileAvgRating !== null ? (
-                  <div className="md-sc-value" style={{display:'flex',alignItems:'baseline',gap:6}}>
+                  <div
+                    className="md-sc-value"
+                    style={{display:'flex',alignItems:'baseline',gap:6,opacity: tileReviewCount < MIN_MEANINGFUL_REVIEWS ? 0.6 : 1}}
+                  >
                     <span className="md-sc-stars" aria-label={`${tileAvgRating} out of 5`}>{starString(tileAvgRating)}</span>
                     <span style={{color:'var(--text2)'}}>{tileAvgRating}</span>
                   </div>
                 ) : (
                   <div className="md-sc-value sm" style={{color:'var(--text-faint)'}}>Unrated</div>
                 )}
-                <div className="md-sc-sub">{tileReviewCount} review{tileReviewCount !== 1 ? 's' : ''}</div>
+                <div className="md-sc-sub">
+                  {tileReviewCount} review{tileReviewCount !== 1 ? 's' : ''}
+                  {tileReviewCount < MIN_MEANINGFUL_REVIEWS ? ' · too few to be reliable' : ''}
+                </div>
               </>
             )}
           </div>
@@ -1711,7 +1726,7 @@ function MintDetailContent({ url }: { url: string }) {
                   </button>
                 )}
               </div>
-              <p className="reviews-disclaimer">Reviews are Nostr events. Counts may differ from other sites.</p>
+              <p className="reviews-disclaimer">Reviews are self-published Nostr events (NIP-87). Anyone can create a new key, so a rating can be artificially inflated — treat it as a directional signal, not proof. Counts may also differ from other sites.</p>
               {reviewsLoading ? (
                 <div style={{fontSize:13,color:'var(--text3)',marginTop:8}}>Loading reviews...</div>
               ) : mergedReviews.length === 0 ? (

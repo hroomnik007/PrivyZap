@@ -681,9 +681,14 @@ Two desktop-layout attempts for the Tools page (`Tools.css`/`Tools.tsx`) were tr
   `TokenSpentCheck`. A button in the inspector result triggers this on demand (not automatic
   — doing so tells the mint someone is checking that specific token right now, which the UI
   discloses via a tooltip).
-- **`InfoTooltip`** — a small shared tooltip component local to `Tools.tsx` (`text`/`width`
-  props) used to explain the DLEQ verification and NUT-07 spent-check actions inline, instead
-  of longer static copy blocks that used to sit in the page body.
+- **`InfoTooltip`** (`src/components/InfoTooltip.tsx` + co-located `.css`) — the shared ⓘ
+  hover-on-desktop / tap-on-mobile tooltip (`text` / `width` / `iconSize` / `className` props;
+  wraps `useTapTooltip`; popup is `role="tooltip"` with its own `.info-tooltip-pop` styling so
+  it renders identically regardless of which page stylesheet is loaded). Promoted out of
+  `Tools.tsx` (2026-09-08) — used there for DLEQ / NUT-07, and on the Community Rating tile
+  (`MintDetail.tsx`, `.community-rating-info`) and the mint card ★ badge (`MintCard.tsx`,
+  `.card-rating-info`) to carry the "self-published Nostr reviews, anyone can mint a key, a
+  score can be inflated — directional signal not proof" caveat. Don't re-add a page-local copy.
 - **`normalizeMintUrl()` moved to `src/utils/mintFormatting.ts`** (was previously local to
   `Tools.tsx`) — lowercases the hostname, forces `https:`, strips a trailing `/` on a bare
   root path. Import it from there if another page needs the same normalization.
@@ -767,8 +772,16 @@ follow the Hide anon toggle, not the full review corpus** — `reviewCountBase` 
 chip count (`All`, `5★`, `Critical`) derives from `reviewCountBase` so the numbers on the
 chips always match what's actually visible. The "Hide anon" chip's own count is always the
 full anonymous-review count (`reviewFilterAnonCount`), independent of its own on/off state.
-A `.reviews-disclaimer` line ("Reviews are Nostr events. Counts may differ from other
-sites.") sits above the chip row, unconditionally.
+A `.reviews-disclaimer` line sits above the chip row, unconditionally. As of 2026-09-08
+(sybil Community Rating mitigation, step 1) it reads: "Reviews are self-published Nostr
+events (NIP-87). Anyone can create a new key, so a rating can be artificially inflated —
+treat it as a directional signal, not proof. Counts may also differ from other sites." The
+same caveat rides an `InfoTooltip` on the Community Rating tile (`.community-rating-info`)
+and the mint card ★ badge (`.card-rating-info`). Separately, a Community Rating average
+backed by fewer than `MIN_MEANINGFUL_REVIEWS` (3, in `mintFormatting.ts`) is de-emphasised
+(`opacity: 0.6` on the badge/value, "· too few to be reliable" on the tile sub-line) — this
+is display-only; the Rating *sort* handles thin samples via the m=8 Bayesian weighting in
+`backend/src/weightedRating.ts`. e2e: `e2e/community-rating-caveat.spec.ts`.
 
 ## Mint Probe — Degraded/Offline Detection
 

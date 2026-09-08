@@ -1,11 +1,10 @@
-import { useState, useMemo, useRef } from 'react'
+import { useState, useMemo } from 'react'
 import { useNavigate } from 'react-router-dom'
-import { Info } from 'lucide-react'
 import { useKnownMints, type KnownMint } from '@/hooks/useKnownMints'
 import { MintFavicon } from '@/components/mint/MintFavicon'
 import { IcShield } from '@/components/mint/IcShield'
+import { InfoTooltip } from '@/components/InfoTooltip'
 import { useNow } from '@/hooks/useNow'
-import { useTapTooltip } from '@/hooks/useTapTooltip'
 import { parseCashuToken, formatTokenAmount, decodeTokenWithMint, checkTokenSpentState, InvalidMintUrlError, type TokenInfo, type TokenSpentCheck } from '@/utils/cashuToken'
 import { normalizeMintUrl, trustColor, trustScoreInfo, mintRiskLevel } from '@/utils/mintFormatting'
 import { isTestMint } from '@/constants/testMints'
@@ -15,27 +14,6 @@ function getHostname(url: string): string {
   try { return new URL(url).hostname } catch { return url }
 }
 
-// Same hover-on-desktop/tap-on-mobile pattern as Stats.tsx's header ⓘ tooltips
-// (useTapTooltip + the shared .audit-tooltip styling) — reused here so the DLEQ
-// and NUT-07 explanations don't have to sit in the main view as permanent text.
-function InfoTooltip({ text, width = 220 }: { text: string; width?: number }) {
-  const ref = useRef<HTMLSpanElement>(null)
-  const tooltip = useTapTooltip(ref)
-  return (
-    <span
-      ref={ref}
-      className="token-info-icon"
-      onPointerEnter={tooltip.onPointerEnter}
-      onPointerLeave={tooltip.onPointerLeave}
-      onClick={tooltip.onClick}
-    >
-      <Info size={12} color="#6b7280" style={{ flexShrink: 0, cursor: 'help' }} />
-      {tooltip.open && (
-        <div className="audit-tooltip" style={{ width }}>{text}</div>
-      )}
-    </span>
-  )
-}
 
 // DLEQ verification's outcome, once it has run. "unreachable" is deliberately distinct
 // from "invalid": failing to reach the mint tells us nothing about the token, while

@@ -122,7 +122,9 @@ test.beforeEach(async ({ page }) => {
 
 test.describe('Mint Detail — Reviews filters (large corpus)', () => {
   test('disclaimer is shown above the filter row and review list', async ({ page }) => {
-    await expect(page.getByText('Reviews are Nostr events. Counts may differ from other sites.')).toBeVisible()
+    await expect(page.locator('.reviews-disclaimer')).toContainText(
+      /self-published Nostr events \(NIP-87\).*directional signal, not proof/i
+    )
   })
 
   test('chip counts match the underlying dataset', async ({ page }) => {

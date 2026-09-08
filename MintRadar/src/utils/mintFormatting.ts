@@ -2,6 +2,12 @@
 // All functions are side-effect free and accept an optional `now` timestamp
 // for deterministic testing.
 
+// Below this many NIP-87 reviews a Community Rating average is too thin to lean
+// on — the displayed number is de-emphasised (the Rating *sort* already handles
+// this separately via the m=8 Bayesian weighting in backend/src/weightedRating.ts).
+// 3 mirrors the audit-reliability "too few samples to score" floor.
+export const MIN_MEANINGFUL_REVIEWS = 3
+
 // ── Mint age badge ─────────────────────────────────────────────
 // Thresholds: < 1 month → Fresh, < 6 months → Established,
 //             < 12 months → Veteran, ≥ 12 months → OG

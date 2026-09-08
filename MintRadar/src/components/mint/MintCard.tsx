@@ -4,11 +4,12 @@ import { useLiveQuery } from 'dexie-react-hooks'
 import { useMintHoverPrefetch } from '@/hooks/useMintHoverPrefetch'
 import { MintFavicon } from '@/components/mint/MintFavicon'
 import { IcShield } from '@/components/mint/IcShield'
+import { InfoTooltip } from '@/components/InfoTooltip'
 import type { KnownMint } from '@/hooks/useKnownMints'
 import { useWatchlistStore } from '@/stores/watchlist.store'
 import { useAuthStore } from '@/stores/auth.store'
 import { useUserRelays } from '@/hooks/useUserRelays'
-import { mintAgeBadge, uptimeColor, formatTimeAgo } from '@/utils/mintFormatting'
+import { mintAgeBadge, uptimeColor, formatTimeAgo, MIN_MEANINGFUL_REVIEWS } from '@/utils/mintFormatting'
 import { isTestMint } from '@/constants/testMints'
 import { db } from '@/db'
 import { resolveNotificationRelays, syncSubscribeToServer, syncUnsubscribeFromServer } from '@/core/nostr/notificationSubscription'
@@ -161,9 +162,18 @@ export function MintCard({
           </span>
         )}
         {(mint.reviewCount ?? 0) > 0 && mint.reviewAvgRating != null && (
-          <span className="card-pill" style={{ color: 'var(--green-bright)', display: 'flex', alignItems: 'center', gap: 4, fontFamily: 'var(--font-mono-data)' }}>
+          <span
+            className="card-pill"
+            style={{ color: 'var(--green-bright)', display: 'flex', alignItems: 'center', gap: 4, fontFamily: 'var(--font-mono-data)', opacity: (mint.reviewCount ?? 0) < MIN_MEANINGFUL_REVIEWS ? 0.6 : 1 }}
+          >
             <span style={{ fontSize: 15, lineHeight: 1 }}>★</span>
             <span>{mint.reviewAvgRating.toFixed(1)} ({mint.reviewCount})</span>
+            <InfoTooltip
+              className="card-rating-info"
+              width={190}
+              iconSize={10}
+              text="Community ratings are self-published Nostr events (NIP-87). Anyone can create a new key to inflate a score — treat it as a directional signal, not proof."
+            />
           </span>
         )}
         {isTestMint(mint.url) && (

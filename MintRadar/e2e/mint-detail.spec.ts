@@ -48,7 +48,9 @@ test.describe('Mint Detail', () => {
     // Relays are stubbed empty and /api/mints/nostr-reviews returns [] → empty state.
     await expect(page.getByText('No Nostr reviews found for this mint yet.')).toBeVisible({ timeout: 15_000 })
     // The disclaimer is shown even with zero reviews (it sits above the loading/empty branch).
-    await expect(page.getByText('Reviews are Nostr events. Counts may differ from other sites.')).toBeVisible()
+    await expect(page.locator('.reviews-disclaimer')).toContainText(
+      /self-published Nostr events \(NIP-87\).*artificially inflated.*directional signal, not proof/i
+    )
     // No filter chips when there is nothing to filter.
     await expect(page.locator('.reviews-filter-chip')).toHaveCount(0)
   })
