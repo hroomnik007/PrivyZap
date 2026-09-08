@@ -47,6 +47,11 @@ describe('MintFavicon', () => {
     expect(b.textContent).toBe('CO')
   })
 
+  it('skips a leading mint./www. when building the monogram', () => {
+    const { container } = render(<MintFavicon url="https://www.mint.example.com" iconUrl={null} />)
+    expect(container.textContent).toBe('EX')
+  })
+
   it('falls back to the placeholder monogram when the proxied image fails to load', () => {
     const { container } = render(
       <MintFavicon url="https://mint.example" iconUrl="https://mint.example/i.png" />,
