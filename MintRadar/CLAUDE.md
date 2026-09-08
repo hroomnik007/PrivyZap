@@ -99,7 +99,11 @@ Rollup columns on `mints`: `review_count INTEGER`, `review_avg_rating REAL`, `re
 - GET /api/stats — network-wide stats: totalMints, onlineMints, offlineMints, avgTrustScore, avgLatency24h, trustDistribution, nutAdoption, top5ByTrustScore
 - GET /api/stats/trust-movers?period={7d|30d} — Trust Score risers/fallers (Stats page). As of 2026-09-01 a plain read of `mints` (`last_trust_score` + `trust_score_{7,30}d_ago` rollup columns), NOT the old two `DISTINCT ON` passes over all of `mint_history` (~2.5s cold — the "old" CTE had no time bound and `trust_score IS NOT NULL` was unindexed). Rollup is refreshed by `refreshTrustMoversRollup()` (`backend/src/trustMoversRollup.ts`) on the 5-min probe cron + ~15s after boot; partial index `idx_mint_history_score_checked ON mint_history(url, checked_at DESC) WHERE trust_score IS NOT NULL` backs its point-in-time lookups. In-memory cache TTL 10min (own `TRUST_MOVERS_CACHE_TTL`, not `KNOWN_MINTS_CACHE_TTL`). +/-3 threshold + top-3 ranking in `trustMovers.ts` (`computeTrustMovers`). Frontend panel (`src/components/stats/TrustMoversPanel.tsx`) takes `loading`/`refreshing` props — skeleton while pending, `keepPreviousData` across the 7d/30d toggle; "No data yet" shows only for a settled-but-empty result.
 - GET /api/mint/probe?url= — on-demand probe of a single mint URL (unauthenticated, SSRF-guarded). **Response scope (2026-09-07 audit L5):** for a mint already in `mints` the full live `/v1/info` + keysets are returned (Mint Detail needs it; the cron already probes those hosts continuously). For any OTHER url only `online` / `latencyMs` / `checkedAt` + a stripped `info` (`name`, `version`, `nuts` with keys only — enough for the Dashboard submit preview) are returned, and `keysets: null` — so it can't be used as a general "fetch and echo the JSON body of arbitrary public host X" oracle.
-- GET /api/mint/icon?url= — SSRF-safe favicon proxy (`backend/src/mintIcon.ts`). `MintFavicon` points every mint `<img>` here instead of fetching the mint-supplied `icon_url` directly — a hostile `icon_url` in a mint's `/v1/info` would otherwise turn every page view into an IP/User-Agent tracking beacon to a host the operator picks (2026-09-07 security audit). Resolves `icon_url` from the DB for a **known mint only** (never proxies an arbitrary caller URL), fetches it via `safeFetch` (SSRF guard + DNS pinning), re-serves the bytes from our origin. Raster + `.ico` only (SVG rejected — would be script-executing on a direct nav), 256 KB cap, `Content-Type` allow-list, in-process cache (6h positive / 30min negative — upstream hit ≤ once/mint/TTL). Anything unsafe/unfetchable → 404 + the client shows its bundled SVG placeholder. `Cache-Control: public, max-age=86400`; `CSP: default-src 'none'; sandbox` + `Cross-Origin-Resource-Policy: same-origin` on the response. Exempt from the per-IP rate limit (favicons burst on a dashboard load; cache makes abuse pointless).
+- GET /api/mint/icon?url= — SSRF-safe favicon proxy (`backend/src/mintIcon.ts`). `MintFavicon` points every mint `<img>` here instead of fetching the mint-supplied `icon_url` directly — a hostile `icon_url` in a mint's `/v1/info` would otherwise turn every page view into an IP/User-Agent tracking beacon to a host the operator picks (2026-09-07 security audit). Resolves `icon_url` from the DB for a **known mint only** (never proxies an arbitrary caller URL), fetches it via `safeFetch` (SSRF guard + DNS pinning), re-serves the bytes from our origin. Raster + `.ico` only, `Content-Type` allow-list, in-process cache (6h positive / 30min negative — upstream hit ≤ once/mint/TTL). Anything unsafe/unfetchable → 404 + the client shows its bundled SVG placeholder. `Cache-Control: public, max-age=86400`; `CSP: default-src 'none'; sandbox` + `Cross-Origin-Resource-Policy: same-origin` on the response. Exempt from the per-IP rate limit.
+  - **2026-09-08 (commit `23fd95e`), driven by a temporary diagnostic-logging run** (65/94 favicons were 404-ing → frontend monogram; 54 = NULL `icon_url` in DB, 5 = a 1–2 MB logo, 2 = a real image served as `application/octet-stream`, rest = upstream 429/404):
+    - **Magic-bytes fallback** — `sniffRasterImageType(buf)` (exported): when the declared `Content-Type` is **not** in `ALLOWED_CONTENT_TYPES`, sniff the leading bytes for PNG (`89 50 4E 47 0D 0A 1A 0A`), JPEG (`FF D8 FF`), GIF (`GIF8`), WebP (`RIFF…WEBP`) and accept with the sniffed type. **SVG stays explicitly rejected on this path** — an `<?xml` / `<svg` guard runs before the signature checks (the M1 stored-XSS decision: a direct nav to the proxy would render SVG as a document on our origin).
+    - **`MAX_ICON_BYTES` 256 KB → 512 KB.** The 1–2 MB outliers still fall back to the monogram; no native image dependency (`sharp`) was added.
+  - Verified live: `cashu.cz` → 200 `image/webp`, `mint.chorus.community` → 200 `image/jpeg`. Tests in `backend/src/__tests__/mintIcon.test.ts`.
 - POST /api/mint/submit — submit new mint URL { url: string }, rate limited 20/IP/hr
 - POST /api/mints/discover — batch insert discovered URLs { urls: string[] }, rate limited 10/IP/hr
 - GET /api/og/mint?url= — bot-only OG HTML fragment for /mint/:url, routed here by nginx UA-sniffing (see "OG tags for /mint/:url" under Security & Infrastructure Gotchas); always 200, never 404/500
@@ -111,11 +115,12 @@ Rollup columns on `mints`: `review_count INTEGER`, `review_avg_rating REAL`, `re
 - **`NOTIFICATION_SERVICE_NSEC` IS set and active in production** (verified 2026-09-07: container env has it, backend logs `[notify-service] service identity loaded (pubkey d03c080f…)` + publishes the "MintRadar Alerts" kind:0). So server-side DM notifications (`notifySubscribers` in `nostrService.ts`, fired on up/down transitions from `probeMintToDb`, 60-min per-direction cooldown) are LIVE, not dormant. **Atomic cooldown (2026-09-07 audit, commit `dc4d993`):** the old SELECT-check → send DM → UPDATE `last_notified` sequence let two overlapping probe cycles both pass the check and both send a duplicate DM. Replaced with a single conditional `UPDATE notification_subscriptions SET last_notified_<dir>_at = now() WHERE mint_url = $1 AND notify_on_<dir> = true AND (last_notified_<dir>_at IS NULL OR last_notified_<dir>_at < now() - INTERVAL '<COOLDOWN_MINUTES> minutes') RETURNING pubkey, relays, …` that **claims** the slot in the DB — DMs go only to the rows it returns, the loser of a race gets zero rows. A claim whose DM never goes out (all relays failed / `wrapEvent` threw) is released (`last_notified_<dir>_at` → NULL, guarded on the exact timestamp set so a concurrent successful claim is never clobbered) so the next cycle retries. `COOLDOWN_MS` (JS) → `COOLDOWN_MINUTES` (one source, used in the SQL interval).
 
 ## /api/stats calculation rules
-- totalMints: mints where latest online IS NOT FALSE (online=true or null) — matches Dashboard "Known Mints"
+- totalMints: **every row in `mints`** — the handler's query 1 is a plain `SELECT … FROM mints m` with **no `WHERE`**, and `totalMints = rows.length`. This is the same full set `/api/mints/known` returns (also unfiltered), so **`/api/stats.totalMints === /api/mints/known.length`** by construction. Integration test `backend/src/__tests__/integration/known-count-consistency.test.ts` locks that invariant (added 2026-09-08 — see "Dashboard Mint Count Distinction" below). Do NOT add a `WHERE is_known` / `.filter()` to one endpoint's count without the other.
 - onlineMints: mints where latest online = true
-- offlineMints: totalMints - onlineMints
-- avgTrustScore: average of (last_trust_score ?? 0) for online mints only — matches Dashboard calculation
+- offlineMints: mints where latest online = false (NOT `total - online` — never-probed `online = null` rows count toward neither)
+- avgTrustScore: average of (last_trust_score ?? 0) for online mints only
 - trustDistribution: low/moderate/high counts from online mints only (same filter as avgTrustScore)
+- top5ByTrustScore: excludes `isTestMint()` URLs (backend copy in `backend/src/testMints.ts`)
 
 ## Trust Score calculation (server-side, in prober.ts)
 - Uptime 45%: uptimePct * 0.45 (from 24h mint_history)
@@ -152,6 +157,53 @@ Community Rating a green star. The shield is `IcShield` (`src/components/mint/Ic
 a small shared SVG component (`size` prop, default 13px, `currentColor` stroke) — also reused
 by the Token Inspector's mint risk badge (`Tools.tsx`, see "Token Inspector" below) and
 `LearnIcons.tsx`. Do not duplicate this shield inline in a new component; import `IcShield`.
+
+## Shared mint-formatting helpers (`src/utils/mintFormatting.ts`)
+
+Pure, side-effect-free, unit-tested (`src/__tests__/mintFormatting.test.ts`). Import from here
+instead of re-inlining — several of these exist specifically because the same logic had drifted
+across components.
+
+- **`mintHostname(url)`** — `new URL(url).hostname`, or the raw string if unparsable.
+- **`displayName({ name, url })`** — the title shown on cards, in the Name sort, the Compare
+  picker, and (as of `f2b25ff`) on the Stats page (Most Reliable, Trust Score Movers, software
+  drilldown, geo modal, NUT-support modal). Steps: trim → strip **one** pair of wrapping
+  `"`/`'` quotes → if the result is empty or in `GENERIC_NAME_DENYLIST` (`cashu`, `cashu mint`,
+  `mint`, case-insensitive) return the hostname → **suffix-collision guard (2026-09-08):** if
+  the resolved name is a parent-domain suffix of the host (`host === name` or
+  `host.endsWith('.' + name)`) return the full hostname. That last step fixes
+  `bitcoin.aleafnd.org` vs `btc.aleafnd.org` both titling as `aleafnd.org`. `"Cashu test mint"`
+  is deliberately NOT denylisted (real known test mint, kept verbatim).
+- **`mintFaviconInitials(url)`** — 2-letter monogram fallback for a mint with no icon. Strips a
+  leading `www.` and/or `mint.` (case-insensitive, both if stacked — `6987e27`) before taking
+  the first two hostname chars, so `mint.example.com` and `example.com` don't both render `MI`.
+- **`cardTrustLabel(score)`** → `"Trust <n>"` (word + number, never a bare `NN%`), `"Trust n/a"`
+  for null/undefined. Rendered on the card as `IcShield` + this label, colored by band
+  (`--green-bright` ≥ 70 / `--amber` ≥ 40 / `--red` else / `--t3` when null). Same formatting is
+  reused by the Best Mint wizard result rows (2026-09-08).
+- **`cardLatencyLabel({ latencyMs, lastError })`** → `"<n> ms"` when a sample exists, `"timeout"`
+  when the probe timed out with no sample, `"n/a"` otherwise. The card's latency row is **always
+  rendered** — never a blank or `"—"`. The uptime chip reads `"<n>% up 24h"`.
+- **`cardLightningLabel({ mintMethods, meltMethods })`** (2026-09-08, commit `b796eff`) →
+  `'LN' | 'LN in' | 'LN out' | null`. Lightning = a method entry whose `method` is `bolt11` or
+  `bolt12` (case-insensitive); `onchain`/`venmo`/`paypal`/etc. ignored. Both sides → `'LN'`,
+  mint-only → `'LN in'`, melt-only → `'LN out'`, methods `null`/`[]` on both sides → `null`
+  (never inferred from `nutCount`/`nutsLimits`). Reads the existing `mintMethods`/`meltMethods`
+  fields on `KnownMint` (from `/api/mints/known` — no backend change). Centralizes the
+  `.some(e => method === 'bolt11'|'bolt12')` check that was duplicated in `MintDetail.tsx` /
+  `Tools.tsx`. Card chip: lucide `<Zap size={10}>` in `currentColor` (no gold emoji) + label,
+  class `card-pill card-ln`, **no `title`/hover text**. ~30 mints have `null` methods
+  (mostly offline / older Nutshell) → they render no chip.
+- **`isNewMint(discoveredAt)` / `NEW_MINT_MAX_DAYS` (30)** — the card/header **"New"** badge.
+  Replaced the Fresh/Established/Veteran/OG age badges on the card (see "Card badges" below).
+- **`firstSeenLabel(discoveredAt)`** → `"First seen <Mon YYYY>"` (UTC), or `null`. Mint Detail
+  header only.
+- **`resolveMintDetailUrl(slug, known)`** (2026-09-08, commit `bbf3eab`) — canonicalizes the
+  `/mint/:url` route param. See "Mint Detail route param canonicalization" below.
+- Also here (own sections / mentions elsewhere): `trustDonutArc`, `auditReliabilityColor`,
+  `formatAuditErrorRatio`, `formatTimeAgo`, `mintRiskLevel`, `normalizeMintUrl`,
+  `trustScoreColor`/`trustScoreInfo`/`trustColor`, `uptimeColor`/`latencyColor`,
+  `MIN_MEANINGFUL_REVIEWS`.
 
 ## Cron jobs
 - Every 5min: probe all mints in DB → write to mint_history, update mints metadata + last_trust_score, **then `refreshTrustMoversRollup()`** (`backend/src/trustMoversRollup.ts`): one `UPDATE mints` recomputing `trust_score_{7,30}d_ago` from `mint_history` (index-backed per-mint `LIMIT 1` lookups). Single-flight, never throws. Also primed ~15s after boot. Feeds `GET /api/stats/trust-movers`.
@@ -303,13 +355,13 @@ batch pattern (`querySync` + race against a timeout, or `subscribeMany` resolved
   and a shield-badge Trust Score (see "Trust Score vs Community Rating" above) — added 2026-09-03.
 
 ## Key features
-- Dashboard: compact/expanded card view, advanced filter panel (Status/TrustScore/Age/NUTs), search, sort ("Most reviewed" before Rating; see "Dashboard controls row" below), mint comparison tool (up to 4, see "Compare feature" above), stats bar, submit form (single + bulk)
-- Mint Detail: MOTD, NUT compatibility grid with modal, NUT limits (NUT-04/05), historical charts (24h/7d/30d/90d, Latency/Uptime/Trust), Mint History panel, version history, Trust Score gauge with breakdown, Audit stats, Add to Wallet + QR, NIP-87 reviews, mint age badges, backup checker (NUT-13)
-- Stats page: totalMints/onlineMints/offlineMints/avgTrustScore/avgLatency cards, NUT adoption horizontal bars (color-coded), Trust Score donut chart, Top 5 by Trust Score
+- Dashboard: compact/expanded card view, filter panel (**Status + Min. Trust Score only** — the "Mint age" Fresh/Established/Veteran/OG block was removed 2026-09-08, see "Card badges" below; `requiredNuts` state still exists but URL-only, no panel UI), search, sort ("Most reviewed" before Rating; see "Dashboard controls row" below), mint comparison tool (up to 4, see "Compare feature" above), stats bar, submit form (single + bulk). One-line explainer above the grid (`.grid-score-explainer`): **"We score how it runs. They score how it went. You pick."** (13.5px / `--t2`).
+- Mint Detail: MOTD, NUT compatibility grid with modal, NUT limits (NUT-04/05), historical charts (24h/7d/30d/90d, Latency/Uptime/Trust), Mint History panel, version history, Trust Score gauge with breakdown, Audit stats, Add to Wallet + QR, NIP-87 reviews, backup checker (NUT-13). Header carries an inline **Online/Offline** pill next to the name, a **New** badge (< 30d), **First seen `<Mon YYYY>`** on the URL row (`firstSeenLabel()`), and a **`Tor`** label prefixing any `.onion` URL. Route param is canonicalized — see "Mint Detail route param canonicalization" below.
+- Stats page: totalMints/onlineMints/offlineMints/avgTrustScore/avgLatency cards, NUT adoption horizontal bars, Trust Score donut chart, Most Reliable / Top Trust widget, Trust Score Movers, Network Health Index, Geographic Distribution, Software in Use. See "Stats widgets (2026-09-08)" below for the recent changes (test-mint exclusion, CDN bucket, software copy, subtitle omission).
 - Watchlist: IndexedDB only, Nostr login required, export JSON/CSV, DM notifications (NIP-07)
-- Wallets: curated Cashu wallet list, `src/constants/wallets.ts` — 9 entries (Minibits, Nutstash, Macadamia, Sovran, Cashu.me, Agicash, Coinos, Zeus, Nutshell) as of 2026-09-03/04. `Agicash` was renamed from `Boardwalk Cash`; `Macadamia`/`Sovran`/`Zeus` were added; `eNuts` was removed (its site was down). No documented inclusion criteria beyond maintainer judgment — treat additions/removals as deliberate curation, not a bug, when this list looks incomplete.
+- Wallets: curated list, `src/constants/wallets.ts`. Main grid = 8 end-user wallets (Minibits, Nutstash, Macadamia, Sovran, Cashu.me, Agicash, Coinos, Zeus). **Nutshell** carries `selfHost: true` and renders in a separate **"Run your own mint"** subsection below the grid (2026-09-08 — it's the reference implementation, not a consumer wallet). Card head: platform icon on the left + `.wallet-platform-tag` chips on the right only (the duplicate standalone platform word was removed). `Agicash` was renamed from `Boardwalk Cash`; `eNuts` was removed. No documented inclusion criteria beyond maintainer judgment.
 - Nostr: NIP-07 login, profile fetch (kind:0), reviews (kind:38000), DM notifications (kind:4), watchlist sync (NIP-44 kind:10003)
-- Learn: educational modules under `src/pages/learn/`; Module 4 and Module 5 each end with a CTA `Link` (added 2026-09-03) — Module 4 → `/wallets` ("Browse Cashu wallets →"), Module 5 → `/watchlist` ("Set up your watchlist →")
+- Learn: educational modules under `src/pages/learn/` (`LearnModule.tsx` router, `LEARN_MODULES` metadata). Slugs: `cashu-basics`, `understanding-the-risks`, `how-to-choose-a-mint`, `getting-started-with-a-wallet`, `safe-habits`. **`/learn/1`…`/learn/5` `<Navigate replace>` to the slug** (matched by `.order`); any other number or unknown slug → "Module not found". Footer nav: `← Previous`, `Next: {title}` for middle modules, **"Browse mints" → `/`** on the last module; "← Back to Learn" kept. Module 4/5 also carry their own in-content CTA `Link` (Module 4 → `/wallets`, Module 5 → `/watchlist`).
 
 ## Deploy workflow (ALWAYS do all steps)
 See CLAUDE.local.md for $VPS_HOST, $VPS_USER, $VPS_REPO_PATH, $VPS_DIST_PATH values.
@@ -477,6 +529,50 @@ An earlier `src/components/mint/MintCard.tsx`/`.css` was deleted (zero imports a
 
 **This is no longer true as of the "Post-redesign fixes round 2" session (commit f98694a) below.** `src/components/mint/MintCard.tsx` was recreated and is now the real, actively-imported shared card component used by both `src/pages/Dashboard.tsx` and `src/pages/Watchlist.tsx`. Any task targeting "the mint card" or "the watch button" should edit this file — not Dashboard.tsx/Watchlist.tsx directly — unless the change is genuinely page-specific.
 
+### Card badges — reduced set + header slot (2026-09-08, commits `c02bdac` / `c9fdaf7`)
+
+The `.card-pills` row (lower body of `MintCard.tsx`) no longer carries age or identity badges:
+
+- **Established / Veteran / OG are gone entirely.** The only age signal on a card is now the
+  **"New"** badge (`isNewMint()`, `discovered_at` < `NEW_MINT_MAX_DAYS` = 30). `mintAgeBadge()`
+  still exists and is still used by `ComparisonModal.tsx`, `Stats.tsx` (its own local copy) and
+  the Dashboard **list-view "Age" column** — just not the card or any filter.
+- **"New" and "Test mint" both live in the card header slot** (top-right of `.card-name-row`,
+  next to the online status dot) via a `.card-hdr-badges` wrapper — classes `.card-hdr-new`,
+  `.card-hdr-test-mint`, `.card-hdr-badge`. When a mint is both fresh and a known test mint the
+  two render side by side. Neither is in `.card-pills` anymore. (`isTestMint()` detection and
+  the Stats "Most Reliable" / Best Mint wizard exclusions are unchanged.)
+- **Trust pill** stays in `.card-pills`: `IcShield` + `cardTrustLabel()` ("Trust N" / "Trust
+  n/a"), colored by band. Unified across desktop/mobile.
+- **Community Rating ★ badge** stays, but its `.card-rating-info` **(i) caveat tooltip was
+  removed** 2026-09-08 (the caveat now lives only in the Reviews-tab `.reviews-disclaimer`).
+  The `reviewSurge` **⚠** flag (`.card-review-surge-flag`) is unchanged.
+- **LN chip** (`.card-ln`) — optional, right after the unit chip. See `cardLightningLabel()` above.
+- Mint Detail header equivalent: an inline **Online/Offline** pill next to the name, **First
+  seen `<Mon YYYY>`** moved onto the URL row (was colliding with the status pill), and a **`Tor`**
+  label (`.md-url-tor`) prefixing any `.onion` URL.
+
+### Mint Detail route param canonicalization (2026-09-08, commit `bbf3eab`)
+
+`resolveMintDetailUrl(slug, known)` in `mintFormatting.ts`, called by the `MintDetail` default
+export **before** rendering `MintDetailContent`. Fixes the "ghost mint" bug where
+`/mint/21mint.me` (a bare host pasted by a user) never matched the tracked row
+`https://21mint.me` and fell through to a hollow live-probe stub (0 NUTs, ~3% Trust,
+"Discovered NIP-87", offline) — making 21Mint look dead.
+
+- **exact tracked match** → render as-is (`{kind:'ok'}`).
+- else canonicalize a bare host → `https://{host}` (path kept, **no invented trailing slash**)
+  and resolve **by hostname**. `pickDashboardRow()` picks among same-host rows: a **probed** row
+  (`online != null`) always beats a never-probed NIP-87-only stub, then bare-root `https://host`,
+  then higher `trustScore`, then shorter URL → `<Navigate replace>` to the canonical encoded URL.
+- **nothing tracked on that host** → a short **`<MintNotTracked>`** state (`.md-not-tracked`,
+  "Not a tracked mint" + a "Did you mean `<host>`?" link via `closestKnownHostUrl`) — never a
+  fabricated full detail.
+- Distinct hosts stay distinct (`bitcoin.aleafnd.org` ≠ `btc.aleafnd.org`). `MintDetailContent`
+  now only ever receives a URL that is in `known`, so `knownMint` is always non-null there.
+- The in-code "Show my latency" SSRF guard stays as defense-in-depth, but an attacker route
+  param now hits the not-tracked state first (no probe-driven detail, no latency button).
+
 ### Mint Detail hover-prefetch (2026-08-30)
 
 `useMintHoverPrefetch()` (`src/hooks/useMintHoverPrefetch.ts`) → `prefetchMintDetail()` (`src/core/mint/prefetch.ts`). `MintCard` and Dashboard's compact list row wire `onPointerEnter`/`onPointerLeave` to it. After a **150ms hover-intent delay** (so a fast grid sweep doesn't fire anything) it `queryClient.prefetchQuery`s the exact queryKeys Mint Detail's own `useQuery` calls use — `['mint','probe',url]` (via the shared `mintProbeQueryOptions` exported from `useMintProbe.ts`), `['mint','chart-history',url,'7d']`, `['mint','history-api',url,'24h']`, `['mint','version-history',url]`, `['mint','nostr-reviews',url]`. Navigation then reuses the primed cache with **zero refetch** (verified). Prefetches that lead to a click are net-neutral on request count; only hover-without-click adds load, which the intent delay minimises. Keys MUST stay in sync with MintDetail.tsx or the prefetch silently primes a dead slot.
@@ -597,6 +693,39 @@ Went through multiple repositioning attempts before landing on the final placeme
 
 **Lesson learned:** when a layout "looks different" or "looks empty" mid-iteration, ask immediately for a `getComputedStyle`/pixel probe instead of judging from a screenshot — visual estimation on this task burned several unnecessary rounds before the probe was requested.
 
+### Stats widgets — 2026-09-08 changes (commits `f2b25ff` / `781617d`)
+
+- **`displayName()` everywhere** (`f2b25ff`) — Most Reliable, Trust Score Movers, software
+  drilldown, geo modal and NUT-support modal now render mint titles via the shared
+  `displayName()` denylist fallback instead of raw `info.name`, so `"Cashu mint"` etc. fall
+  back to the hostname (matches the Dashboard cards).
+- **Header tile subtitles** (`f2b25ff`) — "Mints Tracked"/"Online Now" get "all known"/"of all
+  known"; median latency notes "from Frankfurt". Avg mint uptime subtitle: `f2b25ff` set it to
+  "across all known (offline pulls it down)"; `781617d` trimmed the parenthetical → **"across
+  all known"**.
+- **NHI "Online mints" row tooltip** (`f2b25ff`) — now explicitly says `"<n>/30 are NHI points
+  (this row is 30% of the index), not <n> mints online. Dashboard listed/online counts are a
+  different set."` so it can't be confused with the Dashboard's online headcount. The
+  panel-level ⓘ makes the same point.
+- **Most Reliable list excludes `isTestMint()`** (`781617d`) — `top5ByUptime` filters them out;
+  the **Trust tab (`top5ByTrust`) is deliberately untouched** and still shows a 🧪 Test badge.
+  (An earlier pass, `f2b25ff`, only *badged* them here; `781617d` actually excludes them from
+  the Reliable list.)
+- **Geographic Distribution — "CDN / anycast" bucket** (`781617d`) — `normalizeGeoLoc()` +
+  `CDN_BUCKET` in `src/utils/geoDistribution.ts`: a `serverLocation` matching
+  `cloudflare|cdn|aws|amazon|anycast|akamai|fastly|gcp|google cloud|azure|edgecast|bunny|stackpath|cloudfront`
+  (case-insensitive) collapses to one **"CDN / anycast"** row (counts merged in
+  `computeGeoDistribution`; `Stats.geoLabel` + the `cityMints` modal filter also normalize).
+  **The GeoIP lookup / backend is unchanged** — this is display/aggregation only.
+- **Movers + Most Reliable rows** (`781617d`) — the hostname subtitle `<div>` is omitted when
+  `displayName === hostname` (same rule as the mint cards).
+- **Software in Use panel** (`781617d`) — "Running outdated or older versions" →
+  **"Behind current release"** + a `.stats-sw-behind-info` (i): "we compare the version each
+  mint reports to the latest known release for that implementation — not a CVE or security
+  score." **The 75% `swFreshnessSummary.pct` formula is unchanged.**
+- Tests: `e2e/stats-widgets.spec.ts`, `e2e/stats-nhi-gauge.spec.ts`,
+  `src/__tests__/geoDistribution.test.ts` (`normalizeGeoLoc`).
+
 ## Dashboard Mint Count Distinction (deliberate product decision — 2026-06-20)
 
 The Dashboard stat bar intentionally shows TWO different denominators that represent TWO different concepts:
@@ -604,9 +733,22 @@ The Dashboard stat bar intentionally shows TWO different denominators that repre
 - **"ONLINE MINTS X/Y" denominator** — "active" mints only (excludes mints that have been offline for 24h+, which are hidden from the grid by default behind a "N mints hidden (offline 24h+) — Show" toggle). Matches what's visible in the grid.
 - **"KNOWN MINTS"** — absolute total mint count across the whole system (same source as Stats page "MINTS TRACKED", same as `rows.length` from `/api/stats`). Includes long-offline mints.
 
-These are intentionally different numbers (e.g. "ONLINE MINTS 50/69" vs "KNOWN MINTS 88"). Do NOT "fix" this as an inconsistency in future sessions without re-confirming with the maintainer first.
+These are intentionally different numbers (e.g. "ONLINE MINTS 50/69" vs "ALL KNOWN 88"). "Online X/Y" (Y = non-degraded) and "All Known" (the full set) are still a deliberate distinction — do NOT "fix" that.
 
-The grid's default behavior of hiding 24h+ offline mints is intentional decluttering. The footer shows: "Showing X of Y — N mints hidden (offline 24h+) Show".
+The grid's default behavior of hiding 24h+ offline mints is intentional decluttering. The footer shows: "Showing X of N" (`.grid-showing-note`) + a separate "N mints hidden (offline 24h+) — Show" note.
+
+**Single source of truth for the total (2026-09-08, commit `03f1aeb`):** the Dashboard used to
+merge `useNostrMints()` — a *live client-side* kind:38172 discovery query — into `allMints` and
+the footer total, which produced a real mismatch (**footer "of 102" vs "All Known" tile / Stats
+"94"**). Those extra URLs were raw Nostr announcements the backend had **rejected** via
+`isValidCashuMint()` in `/api/mints/discover` — not tracked mints. `useNostrMints` was removed
+from Dashboard entirely (`useNostrDiscovery()`, which POSTs new URLs to `/api/mints/discover`
+for backend validation, stays). Now **`knownTotal = knownMintsData?.length ?? 0`** is the one
+number behind the "All Known" tile *and* the grid footer's "of N" — and it already equals
+`/api/stats.totalMints` server-side (both are an unfiltered `SELECT … FROM mints`, locked by
+`integration/known-count-consistency.test.ts`). The footer now always reads "Showing `<shown>`
+of `<knownTotal>`" regardless of filters/hiding. `useNostrMints.ts` / `mintDiscovery.ts` are now
+a dead chain (left in place, not deleted).
 
 ## Typography & Design System Notes
 
@@ -652,7 +794,7 @@ recreate it or reference it as if it still exists.)
 - Dashboard mint cards — removed the per-status colored border/gradient (previously every card had a green-tinted border/background regardless of online/offline state); now a neutral border, with color reserved for the status dot and the trust-score chip only
 - Login modal — option cards (Nostr extension/nsec/Amber) get a green tonal border+background only when selected; the nsec security notice box changed from yellow to copper
 - Trust Score ring (Mint Detail) — fixed `--green-bright` ring color (no longer colored by score band), track `--surface-3` — the ring is now purely visual, the score band ("High/Moderate/Low Trust") is still conveyed by the badge text below it
-- `mintAgeBadge()` (`src/utils/mintFormatting.ts`) — Established badge → new tonal green, Fresh badge → copper/amber (was blue); Veteran/OG badges intentionally unchanged (out of scope)
+- `mintAgeBadge()` (`src/utils/mintFormatting.ts`) — Established badge → new tonal green, Fresh badge → copper/amber (was blue); Veteran/OG badges intentionally unchanged (out of scope). **Superseded 2026-09-08: the card no longer shows these badges at all — see "Card badges" below.**
 - Stats page — progress bars alternate green/copper by row index instead of one fixed color for all
 
 **Audit reliability score:** see the shared-module note under "Trust Score calculation" above.
@@ -738,6 +880,17 @@ Verified: typecheck ✅, build ✅, 70/70 unit tests ✅, Playwright confirmed b
   search+Filters pairing is still desktop-style, so this breakpoint only wraps the row and
   shrinks the sort buttons rather than restructuring search/Filters like the 768px block does.
 
+### Dashboard filter panel — Mint age removed (2026-09-08, commit `c02bdac`)
+
+The **"Mint age" (Fresh/Established/Veteran/OG) filter block is gone** — the whole state chain
+was removed: `FilterState.mintAges`, `AGE_LABELS`, the `applyFilters` branch,
+`countActiveFilters` term, the `?age=` URL param + its filter-tag chip, and the panel group.
+The panel is now just **Status** + **Min. Trust Score**. Rationale: those four labels stopped
+being a product concept once the card badge set shrank (see "Card badges" above). No
+replacement third filter was added (no LN filter, no unit filter). On mobile the two remaining
+groups sit side by side (`.filter-row` → `row / nowrap`) so the sheet is shorter.
+`requiredNuts` filter state is left in place but is URL-only (`?nuts=`), no panel UI.
+
 ### Tools page layout — iterations and final state
 
 Two desktop-layout attempts for the Tools page (`Tools.css`/`Tools.tsx`) were tried and reverted before landing on the final, minimal fix:
@@ -746,6 +899,18 @@ Two desktop-layout attempts for the Tools page (`Tools.css`/`Tools.tsx`) were tr
 - **Final state:** layout reverted to full width everywhere — panels, the token textarea, and the Small/Medium/Large option rows are all 100% width again, matching the pre-iteration baseline. The only surviving change is the "Inspect Token" button: it got its own `inspect-token-btn` class (kept separate from the shared `.tool-btn-primary` specifically so the wizard's "Find my mints" button, which also uses `.tool-btn-primary`, is unaffected), with `max-width: 280px` and centered, desktop-only.
 - Mobile layout was never touched across any of these iterations — confirmed correct throughout.
 - The "Tools desktop fix" and "Tools v2" tabs documenting the two rejected attempts lived in `mintradar_redesign_mockup.html`, which has since been deleted (see "Visual Redesign" above) — this list is now the only record of what was tried and why it didn't work.
+
+### Best Mint Wizard (`Tools.tsx` `BestMintWizard`) — 2026-09-08 (commit `781617d`)
+
+- **Disclaimer** — `.wizard-disclaimer` under the "Best Mint for Me" title reads exactly
+  **"Suggestions from our measurements, not an endorsement."**
+- **Test mints excluded** — `candidates` already filters `!isTestMint(m.url)` (line ~473);
+  unchanged, but now explicitly a requirement.
+- **Result rows** — use `displayName(rec.mint)` for the name, and the **card formatting** for
+  the score: `IcShield` + `cardTrustLabel()` colored by band (`.wizard-rec-trust`) plus a
+  `cardLightningLabel()` `<Zap>` chip (`.wizard-rec-ln`) — replacing the old bare `NN%`
+  `.wizard-rec-score`. Per-unit NUT-04/05 limits and the whole-mint caveat note are unchanged.
+- Token Inspector is untouched by this pass.
 
 ### Token Inspector (2026-09-05, `Tools.tsx` + `src/utils/cashuToken.ts`)
 
@@ -771,13 +936,15 @@ Two desktop-layout attempts for the Tools page (`Tools.css`/`Tools.tsx`) were tr
   and the MintDetail "Test latency" guard. Throws a typed `InvalidMintUrlError`; `Tools.tsx`
   renders it as a distinct `"bad-mint-url"` result and makes **no** network request.
 - **`InfoTooltip`** (`src/components/InfoTooltip.tsx` + co-located `.css`) — the shared ⓘ
-  hover-on-desktop / tap-on-mobile tooltip (`text` / `width` / `iconSize` / `className` props;
-  wraps `useTapTooltip`; popup is `role="tooltip"` with its own `.info-tooltip-pop` styling so
-  it renders identically regardless of which page stylesheet is loaded). Promoted out of
-  `Tools.tsx` (2026-09-08) — used there for DLEQ / NUT-07, and on the Community Rating tile
-  (`MintDetail.tsx`, `.community-rating-info`) and the mint card ★ badge (`MintCard.tsx`,
-  `.card-rating-info`) to carry the "self-published Nostr reviews, anyone can mint a key, a
-  score can be inflated — directional signal not proof" caveat. Don't re-add a page-local copy.
+  hover-on-desktop / tap-on-mobile tooltip (`text` / `width` / `iconSize` / `className` /
+  `tone` / `label` props; wraps `useTapTooltip`; popup is `role="tooltip"` with its own
+  `.info-tooltip-pop` styling so it renders identically regardless of which page stylesheet is
+  loaded). Promoted out of `Tools.tsx` (2026-09-08). **Current uses:** DLEQ / NUT-07 in Tools,
+  and the `reviewSurge` **⚠** flag (`tone="warn"`) on the Community Rating tile
+  (`.review-surge-flag`) + mint card ★ badge (`.card-review-surge-flag`). **The plain caveat
+  (i) on `.community-rating-info` / `.card-rating-info` was REMOVED 2026-09-08** — the
+  self-published-reviews caveat now lives only in the Reviews-tab `.reviews-disclaimer`.
+  Don't re-add a page-local copy of the component.
 - **`normalizeMintUrl()` moved to `src/utils/mintFormatting.ts`** (was previously local to
   `Tools.tsx`) — lowercases the hostname, forces `https:`, strips a trailing `/` on a bare
   root path. Import it from there if another page needs the same normalization.
@@ -864,9 +1031,11 @@ full anonymous-review count (`reviewFilterAnonCount`), independent of its own on
 A `.reviews-disclaimer` line sits above the chip row, unconditionally. As of 2026-09-08
 (sybil Community Rating mitigation, step 1) it reads: "Reviews are self-published Nostr
 events (NIP-87). Anyone can create a new key, so a rating can be artificially inflated —
-treat it as a directional signal, not proof. Counts may also differ from other sites." The
-same caveat rides an `InfoTooltip` on the Community Rating tile (`.community-rating-info`)
-and the mint card ★ badge (`.card-rating-info`). Separately, a Community Rating average
+treat it as a directional signal, not proof. Counts may also differ from other sites."
+(The `InfoTooltip` (i) that briefly also carried this caveat on the Community Rating tile
+`.community-rating-info` and the mint card ★ badge `.card-rating-info` was **removed
+2026-09-08** — the Reviews-tab disclaimer is now the only place it lives; the `.review-surge-flag`
+⚠ on those two surfaces is unchanged.) Separately, a Community Rating average
 backed by fewer than `MIN_MEANINGFUL_REVIEWS` (3, in `mintFormatting.ts`) is de-emphasised
 (`opacity: 0.6` on the badge/value, "· too few to be reliable" on the tile sub-line) — this
 is display-only; the Rating *sort* handles thin samples via the m=8 Bayesian weighting in
@@ -973,15 +1142,18 @@ across the app.
 
 ## Testing Infrastructure
 
-### Test counts (as of 2026-06-30): 275 total
+### Test counts (as of 2026-09-08): ~966 total
 
 | Suite | Count | Tool | Location |
 |-------|-------|------|----------|
-| Backend unit | 102 | Vitest | `backend/src/__tests__/` |
-| Frontend unit | 70 | Vitest | `MintRadar/src/__tests__/` |
-| API integration | 46 | Vitest | `backend/src/__tests__/integration/` |
+| Backend unit | ~306 | Vitest | `backend/src/__tests__/` (excl. subdirs) |
+| Frontend unit | 313 | Vitest | `MintRadar/src/__tests__/` |
+| API integration | 115 | Vitest | `backend/src/__tests__/integration/` |
 | Security | 40 | Vitest | `backend/src/__tests__/security/` |
-| E2E | 17 | Playwright | `MintRadar/e2e/` |
+| E2E | 192 | Playwright | `MintRadar/e2e/` (39 spec files) |
+
+`cd backend && npm test` runs all backend suites together and reports **461**
+(306 unit + 115 integration + 40 security). Counts drift often — treat as approximate.
 
 ### Key tested modules
 
@@ -1013,7 +1185,7 @@ The `+ Watch` button on Dashboard mint cards only renders when `isLoggedIn === t
 
 ### CI
 
-`test` job in `.github/workflows/deploy.yml` runs all 275 tests. `deploy` job declares `needs: test` — a failing test blocks deployment.
+`test` job in `.github/workflows/deploy.yml` runs the full suite (backend + frontend unit; e2e is separate). `deploy` job declares `needs: test` — a failing test blocks deployment.
 
 ## NUT tracking expansion (2026-07-02)
 
@@ -1032,10 +1204,17 @@ The `+ Watch` button on Dashboard mint cards only renders when `isLoggedIn === t
 
 ## Mint Age Badge — known data limitation
 
-- `mintAgeBadge()` in `src/utils/mintFormatting.ts` uses thresholds in **months**, not hours/days as previously assumed: `< 1 month` Fresh, `< 6` Established, `< 12` Veteran, `≥ 12` OG
-- Input is `mints.discovered_at` — when MintRadar discovered/inserted the mint, NOT when the mint actually came into existence
-- All 95 mints currently have `discovered_at` in the window 2026-06-17 to 2026-06-30 (from bulk seeding) → all show Fresh right now, none has reached even 1 month
-- This is NOT a bug — it's expected behavior until the data naturally "ages." The badge will start differentiating mints automatically over the following months.
+- **`mintAgeBadge()` no longer drives the mint card or any Dashboard filter (2026-09-08).** The
+  card's age signal is now the binary **"New"** badge (`isNewMint()`, < 30d); Established /
+  Veteran / OG were dropped and the "Mint age" filter block was removed (see "Card badges" and
+  "Dashboard filter panel — Mint age removed" above). `mintAgeBadge()` (shared helper + local
+  copies in `ComparisonModal.tsx` and `Stats.tsx`) is **still used** by the Compare modal, the
+  Stats geo/NUT modals + software-freshness count, and the Dashboard **list-view "Age" column**.
+- `mintAgeBadge()` thresholds are in **months**: `< 1` Fresh, `< 6` Established, `< 12` Veteran,
+  `≥ 12` OG.
+- Input is `mints.discovered_at` — when MintRadar discovered/inserted the mint, NOT the mint's
+  true birth. Bulk-seeded mints all share a mid-2026 `discovered_at`, so the badge only starts
+  differentiating as the data naturally ages — not a bug.
 
 ## Grok external review (2026-07-02)
 
