@@ -2,6 +2,7 @@ import type { MouseEvent } from 'react'
 import { useNavigate } from 'react-router-dom'
 import { useLiveQuery } from 'dexie-react-hooks'
 import { useMintHoverPrefetch } from '@/hooks/useMintHoverPrefetch'
+import { Zap } from 'lucide-react'
 import { MintFavicon } from '@/components/mint/MintFavicon'
 import { IcShield } from '@/components/mint/IcShield'
 import { InfoTooltip } from '@/components/InfoTooltip'
@@ -155,17 +156,11 @@ export function MintCard({
         )}
         {lightningLabel && (
           <span
-            className="card-pill"
-            style={{ fontFamily: 'var(--font-mono-data)' }}
-            title={
-              lightningLabel === 'LN'
-                ? 'Lightning (bolt11/bolt12) supported for minting and melting'
-                : lightningLabel === 'LN in'
-                  ? 'Lightning supported for minting only'
-                  : 'Lightning supported for melting only'
-            }
+            className="card-pill card-ln"
+            style={{ fontFamily: 'var(--font-mono-data)', display: 'flex', alignItems: 'center', gap: 3 }}
           >
-            ⚡ {lightningLabel}
+            <Zap size={10} aria-hidden />
+            <span>{lightningLabel}</span>
           </span>
         )}
         {uptimePct24h !== null && (
@@ -183,12 +178,6 @@ export function MintCard({
           >
             <span style={{ fontSize: 15, lineHeight: 1 }}>★</span>
             <span>{mint.reviewAvgRating.toFixed(1)} ({mint.reviewCount})</span>
-            <InfoTooltip
-              className="card-rating-info"
-              width={190}
-              iconSize={10}
-              text="Community ratings are self-published Nostr events (NIP-87). Anyone can create a new key to inflate a score — treat it as a directional signal, not proof."
-            />
             {mint.reviewSurge && (
               <InfoTooltip
                 className="card-review-surge-flag"

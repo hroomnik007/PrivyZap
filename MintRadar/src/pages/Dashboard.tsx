@@ -130,25 +130,19 @@ const NOSTR_LOOKUP_RELAYS = [
 const DEFAULT_SORT_DIRS: Record<'name' | 'latency' | 'rating' | 'trust' | 'reviewCount', 'asc' | 'desc'> = { rating: 'desc', latency: 'asc', trust: 'desc', name: 'asc', reviewCount: 'desc' }
 
 const NUT_FILTER_KEYS = ['4','5','7','8','9','10','11','12','13','14','15','16','17','18','19','20','21','22','23','24','25','26','27','28','29','30']
-const AGE_LABELS = ['Fresh', 'Established', 'Veteran', 'OG']
 
 interface FilterState {
   status: 'all' | 'online' | 'offline'
   minTrustScore: number
-  mintAges: string[]
   requiredNuts: string[]
 }
-const DEFAULT_FILTERS: FilterState = { status: 'all', minTrustScore: 0, mintAges: [], requiredNuts: [] }
+const DEFAULT_FILTERS: FilterState = { status: 'all', minTrustScore: 0, requiredNuts: [] }
 
 function applyFilters(mints: KnownMint[], filters: FilterState): KnownMint[] {
   return mints.filter(mint => {
     if (filters.status === 'online' && mint.online !== true) return false
     if (filters.status === 'offline' && mint.online !== false) return false
     if (listTrustScore(mint) < filters.minTrustScore) return false
-    if (filters.mintAges.length > 0) {
-      const badge = mintAgeBadge(mint.discoveredAt)
-      if (!badge || !filters.mintAges.includes(badge.label)) return false
-    }
     if (filters.requiredNuts.length > 0) {
       const nuts = mint.nutsLimits as Record<string, unknown> | null
       if (!nuts) return false
@@ -159,7 +153,7 @@ function applyFilters(mints: KnownMint[], filters: FilterState): KnownMint[] {
 }
 
 function countActiveFilters(f: FilterState): number {
-  return [f.status !== 'all' ? 1 : 0, f.minTrustScore > 0 ? 1 : 0, f.mintAges.length > 0 ? 1 : 0, f.requiredNuts.length > 0 ? 1 : 0].reduce((a, b) => a + b, 0)
+  return [f.status !== 'all' ? 1 : 0, f.minTrustScore > 0 ? 1 : 0, f.requiredNuts.length > 0 ? 1 : 0].reduce((a, b) => a + b, 0)
 }
 
 // ── URL persistence (search/sort/filters) ────────────────────────
@@ -186,15 +180,13 @@ function parseFilterParams(params: URLSearchParams): {
   const trustRaw = params.get('trust')
   const trustParsed = trustRaw !== null ? Number(trustRaw) : 0
   const minTrustScore = Number.isFinite(trustParsed) ? Math.min(100, Math.max(0, trustParsed)) : 0
-  const ageRaw = params.get('age')
-  const mintAges = ageRaw ? ageRaw.split(',').filter(a => AGE_LABELS.includes(a)) : []
   const nutsRaw = params.get('nuts')
   const requiredNuts = nutsRaw ? nutsRaw.split(',').filter(n => NUT_FILTER_KEYS.includes(n)) : []
   return {
     search: params.get('q') ?? '',
     sortBy,
     sortDir,
-    filters: { status, minTrustScore, mintAges, requiredNuts },
+    filters: { status, minTrustScore, requiredNuts },
   }
 }
 
@@ -205,7 +197,6 @@ function buildFilterParams(search: string, sortBy: SortByValue, sortDir: 'asc' |
   if (sortDir !== DEFAULT_SORT_DIRS[sortBy]) params.set('dir', sortDir)
   if (filters.status !== 'all') params.set('status', filters.status)
   if (filters.minTrustScore > 0) params.set('trust', String(filters.minTrustScore))
-  if (filters.mintAges.length > 0) params.set('age', filters.mintAges.join(','))
   if (filters.requiredNuts.length > 0) params.set('nuts', filters.requiredNuts.join(','))
   return params
 }
@@ -818,7 +809,6 @@ export default function Dashboard() {
           <div>
             <div className="stat-label">Online Mints</div>
             <div className="stat-value green">{onlineCount} / {totalCount}</div>
-            <div className="stat-sub">of {totalCount} listed</div>
           </div>
         </button>
         <div className="stat-card">
@@ -947,12 +937,6 @@ export default function Dashboard() {
                   <button type="button" onClick={() => { const f = { ...activeFilters, minTrustScore: 0 }; commitFilters({ filters: f }); setPendingFilters(f) }}><IcClose /></button>
                 </span>
               )}
-              {activeFilters.mintAges.map(age => (
-                <span key={age} className="filter-tag">
-                  {age}
-                  <button type="button" onClick={() => { const f = { ...activeFilters, mintAges: activeFilters.mintAges.filter(a => a !== age) }; commitFilters({ filters: f }); setPendingFilters(f) }}><IcClose /></button>
-                </span>
-              ))}
               {activeFilters.requiredNuts.map(nut => (
                 <span key={nut} className="filter-tag">
                   NUT-{nut.padStart(2, '0')}
@@ -984,24 +968,6 @@ export default function Dashboard() {
                 className="filter-slider"
               />
             </div>
-
-            <div className="filter-group filter-box">
-              <div className="filter-group-label">Mint age</div>
-              <div className="filter-pills">
-                {AGE_LABELS.map(age => (
-                  <button
-                    key={age}
-                    type="button"
-                    className={`filter-pill${pendingFilters.mintAges.includes(age) ? ' active' : ''}`}
-                    onClick={() => setPendingFilters(p => ({
-                      ...p,
-                      mintAges: p.mintAges.includes(age) ? p.mintAges.filter(a => a !== age) : [...p.mintAges, age],
-                    }))}
-                  >{age}</button>
-                ))}
-              </div>
-            </div>
-
           </div>
 
           <div className="filter-footer">

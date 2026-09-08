@@ -1382,12 +1382,10 @@
   .mint-list-td-name { min-width: 0; max-width: none; }
   .mint-list-name { max-width: 120px; }
   .mint-list-table td.trust-col { min-width: 48px; }
-  .filter-row { flex-direction: column; gap: 14px; }
-  /* Column layout: `flex-basis: 180px` from the desktop `flex: 1 1 180px` now
-     applies to the MAIN axis = height, and `flex-grow` stretches each box
-     vertically — that was the huge empty space under each box's content.
-     Reset to content height. */
-  .filter-box { flex: 0 0 auto; width: 100%; min-width: 0; }
+  /* Two filter groups (Status + Min. Trust) stay side by side on mobile so the
+     sheet is short — two equal columns rather than a tall stack. */
+  .filter-row { flex-direction: row; flex-wrap: nowrap; gap: 10px; }
+  .filter-box { flex: 1 1 0; width: auto; min-width: 0; padding: 10px 12px; }
   .filter-group-row-top { display: flex; flex-direction: row; gap: 16px; width: 100%; }
   .filter-group-row-top .filter-group { flex: 1; min-width: 0; }
   .filter-group-row-top .filter-slider { width: 100%; }

@@ -810,9 +810,6 @@ function MintDetailContent({ url }: { url: string }) {
                 {isNew && (
                   <span className="md-age-badge-inline" style={{fontSize:12,fontFamily:'var(--font-mono)',fontWeight:600,color:'#d3a446',background:'rgba(211,164,70,.14)',border:'0.5px solid rgba(211,164,70,.3)',borderRadius:5,padding:'3px 9px',flexShrink:0}}>New</span>
                 )}
-                {firstSeen && (
-                  <span className="md-first-seen-inline" style={{fontSize:12,fontFamily:'var(--font-mono)',color:'var(--text-faint)',flexShrink:0}}>{firstSeen}</span>
-                )}
                 {isTestMint(url) && (
                   <span style={{fontSize:12,fontFamily:'var(--font-mono)',fontWeight:600,color:'var(--amber)',background:'var(--amber-soft)',border:'0.5px solid var(--amber-soft-strong)',borderRadius:5,padding:'3px 9px',flexShrink:0}} title="Not for real funds — for testing and development only">
                     🧪 Test mint
@@ -832,6 +829,9 @@ function MintDetailContent({ url }: { url: string }) {
                 <span>{url}</span>
                 {copiedLink ? <Check size={12} /> : <Copy size={12} />}
               </button>
+              {firstSeen && (
+                <div className="md-first-seen" style={{fontSize:12,fontFamily:'var(--font-mono)',color:'var(--text-faint)',marginTop:4}}>{firstSeen}</div>
+              )}
             </div>
           </div>
         </div>
@@ -989,12 +989,6 @@ function MintDetailContent({ url }: { url: string }) {
           <div style={{flex:1}}>
             <div className="md-sc-label" style={{display:'flex',alignItems:'center',gap:4}}>
               Community rating
-              <InfoTooltip
-                className="community-rating-info"
-                width={210}
-                iconSize={11}
-                text="Ratings come from self-published Nostr reviews (NIP-87). Anyone can create a new key, so a score can be artificially inflated — treat it as a directional signal, not proof."
-              />
               {knownMint?.reviewSurge && (
                 <InfoTooltip
                   className="review-surge-flag"

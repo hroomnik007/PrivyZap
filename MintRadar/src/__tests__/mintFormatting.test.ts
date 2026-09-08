@@ -152,6 +152,30 @@ describe('displayName', () => {
   it('leaves an unparsable URL as the fallback string', () => {
     expect(displayName({ name: '', url: 'not-a-url' })).toBe('not-a-url')
   })
+
+  it('falls back to the full hostname when the name is a parent-domain suffix of the host', () => {
+    // Two sibling mints whose /v1/info name is the shared parent domain must
+    // not both title as "aleafnd.org".
+    expect(displayName({ name: 'aleafnd.org', url: 'https://bitcoin.aleafnd.org/cashu' }))
+      .toBe('bitcoin.aleafnd.org')
+    expect(displayName({ name: 'aleafnd.org', url: 'https://btc.aleafnd.org/cashu' }))
+      .toBe('btc.aleafnd.org')
+  })
+
+  it('two hosts sharing a parent label get distinct titles', () => {
+    const a = displayName({ name: 'aleafnd.org', url: 'https://bitcoin.aleafnd.org/cashu' })
+    const b = displayName({ name: 'aleafnd.org', url: 'https://btc.aleafnd.org/cashu' })
+    expect(a).not.toBe(b)
+  })
+
+  it('keeps a name that merely shares a substring (not a label boundary) with the host', () => {
+    // "leafnd.org" is a substring but not a dot-delimited suffix → name kept.
+    expect(displayName({ name: 'Leafy', url: 'https://bitcoin.aleafnd.org' })).toBe('Leafy')
+  })
+
+  it('returns the hostname (not a crash) when name equals the hostname exactly', () => {
+    expect(displayName({ name: 'mint.example.com', url: host })).toBe('mint.example.com')
+  })
 })
 
 // ── mintFaviconInitials ───────────────────────────────────────

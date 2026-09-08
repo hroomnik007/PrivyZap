@@ -40,7 +40,7 @@ test.describe('MintCard — copy & reduced badge set', () => {
     await expect(card(page, 'Alpha Mint').locator('.card-pill', { hasText: '99% up 24h' })).toBeVisible()
   })
 
-  test('Lightning chip: "⚡ LN" when bolt11 is on mint + melt, nothing when methods are absent', async ({ page }) => {
+  test('Lightning chip: "LN" when bolt11 is on mint + melt, "LN in" for mint-only, none when methods absent', async ({ page }) => {
     // Fixture buildMethods() gives bolt11 on both sides for any mint with units;
     // Charlie has units: null → no methods → no chip.
     const rows = MOCK_KNOWN_MINTS.map(m => {
@@ -51,11 +51,13 @@ test.describe('MintCard — copy & reduced badge set', () => {
     await page.goto('/')
     await expect(page.locator('.mint-card')).toHaveCount(4)
 
-    await expect(card(page, 'Alpha Mint').locator('.card-pill', { hasText: '⚡ LN' })).toHaveText('⚡ LN')
+    await expect(card(page, 'Alpha Mint').locator('.card-ln')).toHaveText('LN')
     // mint has bolt11, melt is onchain-only → "LN in"
-    await expect(card(page, 'Bravo Mint').locator('.card-pill', { hasText: '⚡ LN in' })).toBeVisible()
+    await expect(card(page, 'Bravo Mint').locator('.card-ln')).toHaveText('LN in')
     // no method data at all → no chip
-    await expect(card(page, 'Charlie Mint').locator('.card-pill', { hasText: '⚡' })).toHaveCount(0)
+    await expect(card(page, 'Charlie Mint').locator('.card-ln')).toHaveCount(0)
+    // the chip has no hover text
+    await expect(card(page, 'Alpha Mint').locator('.card-ln')).not.toHaveAttribute('title', /.*/)
   })
 
   test('latency row is never blank — sampled / timeout / n/a', async ({ page }) => {
@@ -77,7 +79,10 @@ test.describe('MintCard — copy & reduced badge set', () => {
     await page.goto('/')
     const bar = page.locator('.stats-bar')
     await expect(bar.getByText('Online Mints')).toBeVisible()
-    await expect(bar.getByText('of 4 listed')).toBeVisible()          // 4 non-degraded mock mints
+    // The Online tile shows the live fraction only — the "of N listed" subtitle
+    // was removed (it just repeated the denominator).
+    await expect(bar.locator('.stat-card', { hasText: 'Online Mints' }).locator('.stat-value')).toHaveText('3 / 4')
+    await expect(bar.getByText(/of \d+ listed/)).toHaveCount(0)
     await expect(bar.getByText('All Known')).toBeVisible()
     await expect(bar.getByText('incl. offline')).toBeVisible()
     await expect(bar.getByText('from Frankfurt')).toBeVisible()

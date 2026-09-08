@@ -37,6 +37,13 @@ export function displayName(mint: { name?: string | null | undefined; url: strin
     }
   }
   if (name === '' || GENERIC_NAME_DENYLIST.has(name.toLowerCase())) return host
+  // If the resolved name is just a parent-domain suffix of the hostname
+  // (e.g. name "aleafnd.org" for host "bitcoin.aleafnd.org"), two sibling
+  // mints under the same parent domain would collapse to an identical title.
+  // Fall back to the full hostname so they stay distinguishable.
+  const nl = name.toLowerCase()
+  const hl = host.toLowerCase()
+  if (hl === nl || hl.endsWith('.' + nl)) return host
   return name
 }
 

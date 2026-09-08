@@ -3,15 +3,14 @@ import { installApiMocks, mockRelays, MOCK_MINTS, MOCK_KNOWN_MINTS } from './fix
 
 type Route = import('@playwright/test').Route
 
-// Step 1 of the sybil-inflatable Community Rating mitigation (2026-09-08 security
-// audit run-2 follow-up): a caveat on every surface that shows the crowd rating —
-// a strengthened Reviews-tab disclaimer plus an ⓘ tooltip on the rating tile
-// (Mint Detail) and the ★ badge (mint card). Anyone can mint a fresh Nostr key,
-// so the number is a directional signal, not proof.
+// The self-published-reviews caveat now lives only in the Reviews tab copy —
+// the small ⓘ tooltip that used to sit on the Mint Detail rating tile and the
+// mint card ★ badge was removed (it repeated the Reviews-tab disclaimer and
+// crowded the pill row). The forgery-resistant "recent review surge" ⚠ flag
+// stays on both surfaces.
 
 const ALPHA = MOCK_MINTS[0]!.url
 const detailPath = `/mint/${encodeURIComponent(ALPHA)}`
-const CAVEAT_RE = /create a new key/i
 
 type Page = import('@playwright/test').Page
 
@@ -20,70 +19,24 @@ async function setup(page: Page) {
   await installApiMocks(page)
 }
 
-test.describe('Community Rating caveat — mint card ★ badge', () => {
-  test('desktop: hovering the ⓘ in the rating pill reveals the caveat', async ({ page }) => {
+test.describe('Community Rating — no ⓘ caveat tooltip on card / detail tile', () => {
+  test('the mint card ★ badge has no ⓘ tooltip', async ({ page }) => {
     await setup(page)
     await page.goto('/')
 
     const ratingPill = page.locator('.mint-card', { hasText: 'Alpha Mint' })
       .locator('.card-pill', { hasText: '4.2 (12)' })
     await expect(ratingPill).toBeVisible()
-
-    const info = ratingPill.locator('.card-rating-info')
-    await expect(info).toBeVisible()
-    await expect(page.getByRole('tooltip')).toHaveCount(0)
-
-    await info.hover()
-    await expect(page.getByRole('tooltip')).toContainText(CAVEAT_RE)
+    await expect(ratingPill.locator('.card-rating-info')).toHaveCount(0)
   })
 
-  test.describe('mobile', () => {
-    test.use({ viewport: { width: 393, height: 851 }, hasTouch: true, isMobile: true })
-
-    test('tapping the ⓘ opens the caveat and does NOT navigate into the card', async ({ page }) => {
-      await setup(page)
-      await page.goto('/')
-
-      const info = page.locator('.mint-card', { hasText: 'Alpha Mint' })
-        .locator('.card-pill', { hasText: '4.2 (12)' })
-        .locator('.card-rating-info')
-      await expect(info).toBeVisible()
-
-      await info.tap()
-      await expect(page.getByRole('tooltip')).toContainText(CAVEAT_RE)
-      // useTapTooltip.onClick calls stopPropagation → the card's navigate handler never fires.
-      await expect(page).toHaveURL(/\/$/)
-    })
-  })
-})
-
-test.describe('Community Rating caveat — Mint Detail rating tile', () => {
-  test('desktop: hovering the ⓘ next to "Community rating" reveals the caveat', async ({ page }) => {
+  test('the Mint Detail rating tile has no ⓘ tooltip', async ({ page }) => {
     await setup(page)
     await page.goto(detailPath)
 
     const label = page.locator('.md-sc-label', { hasText: 'Community rating' })
     await expect(label).toBeVisible()
-
-    const info = label.locator('.community-rating-info')
-    await info.hover()
-    await expect(page.getByRole('tooltip')).toContainText(/self-published Nostr reviews \(NIP-87\)/i)
-  })
-
-  test.describe('mobile', () => {
-    test.use({ viewport: { width: 393, height: 851 }, hasTouch: true, isMobile: true })
-
-    test('tapping the ⓘ opens the caveat', async ({ page }) => {
-      await setup(page)
-      await page.goto(detailPath)
-
-      const info = page.locator('.md-sc-label', { hasText: 'Community rating' })
-        .locator('.community-rating-info')
-      await expect(info).toBeVisible()
-
-      await info.tap()
-      await expect(page.getByRole('tooltip')).toContainText(CAVEAT_RE)
-    })
+    await expect(label.locator('.community-rating-info')).toHaveCount(0)
   })
 })
 
@@ -141,9 +94,8 @@ test.describe('Recent review surge — mint card', () => {
     const delta = page.locator('.mint-card', { hasText: 'Delta Mint' })
 
     await expect(alpha.locator('.card-review-surge-flag')).toBeVisible()
-    // Delta grew organically → no surge flag (but still has the normal rating caveat ⓘ).
+    // Delta grew organically → no surge flag.
     await expect(delta.locator('.card-review-surge-flag')).toHaveCount(0)
-    await expect(delta.locator('.card-rating-info')).toBeVisible()
 
     await alpha.locator('.card-review-surge-flag').hover()
     await expect(page.getByRole('tooltip')).toContainText(SURGE_RE)

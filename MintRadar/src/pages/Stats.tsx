@@ -895,7 +895,7 @@ export default function Stats() {
             <div className="smc-value" style={{color: avgUptime24h != null ? uptimeColor(avgUptime24h) : undefined}}>
               {avgUptime24h != null ? `${avgUptime24h}%` : '—'}
             </div>
-            <div className="smc-sub">across all known (offline pulls it down)</div>
+            <div className="smc-sub">across all known</div>
           </div>
         </div>
         <div className="stats-metric-card">
