@@ -105,10 +105,10 @@ Rollup columns on `mints`: `review_count INTEGER`, `review_avg_rating REAL`, `re
 - GET /api/og/mint?url= — bot-only OG HTML fragment for /mint/:url, routed here by nginx UA-sniffing (see "OG tags for /mint/:url" under Security & Infrastructure Gotchas); always 200, never 404/500
 - GET /api/mints/nostr-reviews?url= — **DB read from `mint_reviews`** (as of 2026-08-30; previously a live per-request kind:38000 relay query, ~3s — the biggest Mint Detail load cost). Serves the rows the 6h reviews sync populates; `Cache-Control: max-age=120`. Still the secondary source alongside the frontend's own live fetch — see "Reviews Feature" below.
 - `/api/mints/known` also now carries `reviewCount` / `reviewAvgRating` (from the `mints` rollup columns) so Mint Detail's Community-rating tile renders immediately without waiting on any relay.
-- POST /api/notifications/subscribe — NIP-98-authed. Body `{ mintUrl, notifyOnDown, notifyOnUp, relays: string[1..10] }`. All writes hard-scoped to the signature-verified `event.pubkey` (no IDOR). Rate limit **30/hr/pubkey**. **Per-pubkey caps** (`index.ts`, added 2026-09-07): `MAX_SUBSCRIPTIONS_PER_PUBKEY = 50` (new mint rows past this → **409** with an actionable message; updating an existing row is always allowed) and `MAX_DISTINCT_RELAYS_PER_PUBKEY = 25` (union of stored `relays` across all the pubkey's rows; over → **400**). Both are far above legit use (a user watches single-/low-double-digit mints and reuses one relay list) and exist because `notifySubscribers` fans a gift-wrap signed by `NOTIFICATION_SERVICE_NSEC` out to `row.relays ∪ NOTIFICATION_RELAYS` on every mint transition — without a total cap one free pubkey could turn a flapping mint into amplified traffic and get the service key relay-banned. Residual (not closed by per-pubkey caps): a **sybil-key** attacker (N free pubkeys, one flapping mint) — needs per-mint subscriber caps or per-IP creation accounting; tracked, not yet done.
+- POST /api/notifications/subscribe — NIP-98-authed. Body `{ mintUrl, notifyOnDown, notifyOnUp, relays: string[1..10] }`. All writes hard-scoped to the signature-verified `event.pubkey` (no IDOR). Rate limit **30/hr/pubkey**. **Per-pubkey caps** (`index.ts`, added 2026-09-07): `MAX_SUBSCRIPTIONS_PER_PUBKEY = 50` (new mint rows past this → **409** with an actionable message; updating an existing row is always allowed) and `MAX_DISTINCT_RELAYS_PER_PUBKEY = 25` (union of stored `relays` across all the pubkey's rows; over → **400**). Both are far above legit use (a user watches single-/low-double-digit mints and reuses one relay list) and exist because `notifySubscribers` fans a gift-wrap signed by `NOTIFICATION_SERVICE_NSEC` out to `row.relays ∪ NOTIFICATION_RELAYS` on every mint transition — without a total cap one free pubkey could turn a flapping mint into amplified traffic and get the service key relay-banned. Residual (not closed by per-pubkey caps): a **sybil-key** attacker (N free pubkeys, one flapping mint) — needs per-mint subscriber caps or per-IP creation accounting; tracked, not yet done. **Log-injection (2026-09-07 audit L1, commit `ac7c174`):** every relay URL from `relays[]` interpolated into `validateRelays()`'s `console.warn` lines is now run through `sanitizeLogValue()` (control chars → U+FFFD, length-capped) — run-1 #5 had fixed only the `/unsubscribe` path.
 - POST /api/notifications/unsubscribe — NIP-98-authed. Body `{ mintUrl }`, normalised via `new URL()` + `normalizeUrl()` before the DELETE + log line. 30/hr/pubkey.
 - **NIP-98 replay guard (`nip98Auth.ts`, 2026-09-07 audit defence-in-depth):** `authenticateNip98` keeps an in-process `Map` of accepted event ids (TTL 120s, > NIP-98's ±60s `created_at` window) and rejects the second sighting of an id with **401 `NIP-98 token already used`**. Closes the "capture a token, resend within 60s with a swapped body to overwrite the victim's own subscription" window (the `payload` body-hash tag is optional and the client doesn't send it, so nothing else binds a token to its request body). Same shape as the IP rate limiter's Map+sweep; process-local, so a multi-instance backend would need this in Redis. A token id is the hash of `[pubkey, created_at, kind, tags, content]` (signature-independent), so a genuine client sending N requests/second must vary `created_at` — real clients mint a fresh token per request anyway. `_resetNip98NonceCache()` test hook.
-- **`NOTIFICATION_SERVICE_NSEC` IS set and active in production** (verified 2026-09-07: container env has it, backend logs `[notify-service] service identity loaded (pubkey d03c080f…)` + publishes the "MintRadar Alerts" kind:0). So server-side DM notifications (`notifySubscribers` in `nostrService.ts`, fired on up/down transitions from `probeMintToDb`, 60-min per-direction cooldown) are LIVE, not dormant.
+- **`NOTIFICATION_SERVICE_NSEC` IS set and active in production** (verified 2026-09-07: container env has it, backend logs `[notify-service] service identity loaded (pubkey d03c080f…)` + publishes the "MintRadar Alerts" kind:0). So server-side DM notifications (`notifySubscribers` in `nostrService.ts`, fired on up/down transitions from `probeMintToDb`, 60-min per-direction cooldown) are LIVE, not dormant. **Atomic cooldown (2026-09-07 audit, commit `dc4d993`):** the old SELECT-check → send DM → UPDATE `last_notified` sequence let two overlapping probe cycles both pass the check and both send a duplicate DM. Replaced with a single conditional `UPDATE notification_subscriptions SET last_notified_<dir>_at = now() WHERE mint_url = $1 AND notify_on_<dir> = true AND (last_notified_<dir>_at IS NULL OR last_notified_<dir>_at < now() - INTERVAL '<COOLDOWN_MINUTES> minutes') RETURNING pubkey, relays, …` that **claims** the slot in the DB — DMs go only to the rows it returns, the loser of a race gets zero rows. A claim whose DM never goes out (all relays failed / `wrapEvent` threw) is released (`last_notified_<dir>_at` → NULL, guarded on the exact timestamp set so a concurrent successful claim is never clobbered) so the next cycle retries. `COOLDOWN_MS` (JS) → `COOLDOWN_MINUTES` (one source, used in the SQL interval).
 
 ## /api/stats calculation rules
 - totalMints: mints where latest online IS NOT FALSE (online=true or null) — matches Dashboard "Known Mints"
@@ -167,6 +167,8 @@ by the Token Inspector's mint risk badge (`Tools.tsx`, see "Token Inspector" bel
 - **kind:38172** — NIP-87 mint announcements (direct `u` tag)
 - **kind:38000** — reviews; `#u` tag mining extracts reviewed mint URLs
 - **audit.8333.space** — external audit API. `discoverMintsFromApi()` does 2 passes over the ~65 mints audit.8333.space knows about: (1) one paginated `GET /mints/` call (100/page) for discovery + cumulative lifetime counts (`audit_n_mints`/`audit_n_melts`/`audit_n_errors`, display-only, feeds the Audit tab's all-time line) and each mint's audit refresh time (`audit_synced_at = NOW()`) and to capture each mint's audit.8333.space `id` (stored as `audit_id`); (2) a sequential per-mint `GET /swaps/mint/{id}?limit=100` pass (~65 extra requests, 150ms apart) for the rolling-window reliability score (`audit_recent_total`/`audit_recent_errors`, feeds Trust Score — see above). Runs once per 6h discovery cycle, so ~65 extra requests/6h — not throttled further, well within reasonable API use.
+
+**`safeFetch` for outbound API calls (2026-09-07 audit, commit `11c30f1`):** `discovery.ts` (audit.8333.space `/mints/` + `/swaps/mint/{id}`) and `versionCatalog.ts` (`api.github.com/.../releases/latest`) used plain `fetch()` — no connect-time DNS pinning, and undici auto-follows up to 20 redirect hops. Both now call `safeFetch()` (`isSafeUrl()` pre-check + `safeAgent` DNS pinning rejecting private/loopback/link-local/CGNAT at connect + manual redirect following, max 3, each hop re-validated + `credentials: 'omit'`). `SafeFetchOptions` gained an optional `headers` (GitHub Accept header). `safeFetch` returns `Response | null` and never throws, so the "keep last known value" behaviour is preserved. Defence-in-depth — the hostnames are hardcoded constants. **Note:** the root `nostr-tools` `SimplePool` used by `discovery.ts` / `reviewsSync.ts` is NOT the DNS-pinned pool `nostrService.ts` uses — it is only safe because its relay lists are hardcoded; a future dynamic relay list must switch to `DnsPinnedWebSocket` or it becomes SSRF (commented at both sites, `3c8867f`).
 
 Approximate yields (as of 2026-06-29): kind:38172 ~33 mints, kind:38000 ~37 mints, audit.8333.space ~61 mints. Total DB: ~97 mints.
 
@@ -354,6 +356,8 @@ Login modal (`src/components/layout/AppShell.tsx`) supports three methods select
 - **NIP-07** — calls `window.nostr.getPublicKey()`; all signing stays in the extension
 - **nsec** — decoded in `src/core/nostr/client.ts:loginWithNsec`, then held in a module-scoped variable (`activeNsecPrivkey`) for the session via `installNsecShim()` so the app can sign on the user's behalf (notifications, watchlist sync, reviews) — mirrors `installBunkerShim()`'s pattern. **Never written to any storage API** (sessionStorage/localStorage/IndexedDB) — in-memory only, so it does not survive a page reload. Zeroed via `.fill(0)` and cleared on logout by `removeNsecShim()` (called from `useAuthStore.logout()`, alongside `removeBunkerShim()`). The login modal explicitly discloses this to the user (nsec security notice box + footer line in `AppShell.tsx`).
 - **Amber / NIP-46 bunker** — fully implemented via `nostr-tools/nip46` `BunkerSigner`; accepts `bunker://` URI or NIP-05 identifier; QR pairing flow for mobile Amber; session persisted in `sessionStorage` (`bunkerURI`, `bunkerClientSecretKey`, `bunkerPubkey`); 30s connection timeout; client keypair is ephemeral (NOT the user's identity key)
+  - **`openRemoteSignerAuthUrl()` (2026-09-07 audit L3, commit `ac7c174`)** — NIP-46 `onauth` used to open the remote-signer-supplied URL with a bare `window.open(url, '_blank')`; a malicious bunker could return a phishing / `javascript:` / `data:` URL or reverse-tabnab via `window.opener`. The helper opens only `https://` URLs, always with `noopener,noreferrer`; non-string / other schemes are ignored with a warning. Wired into all 3 onauth sites (`loginWithBunker`, `initBunkerQR`, `restoreBunkerSession`).
+  - **`initBunkerQR` cancel race (2026-09-07 audit L2, commit `0a0cdd0`)** — its `Promise.race([rawSigner, timeout]).then(...)` success path installed the `window.nostr` shim + wrote the bunker credentials with no check that the pairing was still wanted, so a Cancel/close landing in the same tick the connect-ack resolved left a live signer that silently re-logged the user in on the next load. The `.then` now bails on `abortCtrl.signal.aborted` (re-checked after each await): `signer.close()`, pool disposed, reject with `AbortError`, **no** state committed.
 
 `sessionStorage` (Zustand persist) stores only the public `NostrProfile` `{ pubkey, npub, name, picture }` — no private key material is ever written to any storage API. For nsec logins the raw key is held in JS memory only (see above), which is a deliberate trade-off (enables signing) — do not add any persistence for it without re-confirming with the maintainer, since that would defeat the "in-memory only, lost on reload" guarantee.
 
@@ -479,7 +483,81 @@ An earlier `src/components/mint/MintCard.tsx`/`.css` was deleted (zero imports a
 
 ### Security audit
 
-Full report in `AUDIT.md` at the repo root. Covers: telemetry, key handling, dependencies, XSS, backend API, secrets, Docker, HTTP headers. Backend is at 0 npm vulnerabilities. Frontend has 6 remaining (all dev-server only; Vite v8 upgrade needed to fix).
+Original report in `AUDIT.md` at the repo root (2026-06-20). Covers: telemetry, key
+handling, dependencies, XSS, backend API, secrets, Docker, HTTP headers. As of 2026-09-07
+`npm audit` is **0 vulnerabilities in both trees** (the Vite 5→8 upgrade shipped and closed
+the old 6 dev-server-only frontend findings — the "Frontend has 6 remaining" line in older
+notes / AUDIT.md's body is stale, see its UPDATE banner).
+
+#### Prior audit history
+
+- **Run-1 (2026-08-16, `security-audit` skill).** 5 findings, all verified remediated in
+  code by run-2: WebSocket connect-time DNS pinning (harness-verified), login-shim
+  `__mintradarShim` marker, the `/api/notifications/unsubscribe` log-injection fix (run-2
+  L1 found the sibling `/subscribe` endpoint was missed — now fixed too), and the
+  `isValidCashuMint` submit/discovery gate (run-2 MEDIUM #2 showed it is bypassable — see
+  the daily `revalidateMints()` sweep under Cron jobs).
+- **Run-2 (2026-09-07, full 8-agent `security-audit` skill run).** Output in
+  `~/security-audit-skill/MintRadar/run-2/` (REPORT.md, FINDINGS-DETAIL.md, findings.json —
+  validator PASS). **1 HIGH + 6 MEDIUM + 7 LOW — all remediated + deployed by 2026-09-08.**
+  - **HIGH H1** — a malicious mint self-inflated its Trust Score to 100 (→ #1 "Most
+    Reliable" / Best Mint Wizard) via 60 fake `/v1/info` `contact` entries.
+    `contactComponent()` now clamps `Math.min(contactCount, 3)` before the ratio — commit
+    `e599749`, see "Trust Score calculation → Contact component" above.
+  - **MEDIUM** — M1 `icon_url` favicon deanonymization beacon → SSRF-guarded
+    `GET /api/mint/icon` proxy (`b0c3dd8`, see Backend API). M2 "validate once, then
+    DNS/redirect-repoint anywhere" confused-deputy → daily `revalidateMints()` +
+    `mints.invalid_since` + 7-day reap (`0f53f15`, see Cron jobs). M3 notification fan-out
+    amplifier signed by the service key → per-pubkey subscription/relay caps (`aed8159`,
+    see `POST /api/notifications/subscribe`); residual sybil-key vector tracked, not closed.
+    M4/M5/M6 client-side pubkey-race / hostile-relay trust issues → `5ff2b8d`, see
+    "Watchlist sync + relay bootstrap hardening" below.
+  - **LOW** — L1 log injection via `relays[]` in `/subscribe` (`sanitizeLogValue()`,
+    `ac7c174`). L2 `initBunkerQR` cancelled-QR race → orphaned signer + silent re-login,
+    now abort-checked (`0a0cdd0`). L3 NIP-46 `onauth` `window.open` unvalidated →
+    `openRemoteSignerAuthUrl()` (https-only, `noopener,noreferrer`) at all 3 onauth sites
+    (`ac7c174`). L4 client-side SSRF via a pasted token's `mint` URL →
+    `assertProbeableMintUrl()` guard in `cashuToken.ts` (`07a8eac`, see Token Inspector).
+    L5 `/api/mint/probe` fetch-oracle → response shrunk for non-known URLs (`ac7c174`, see
+    Backend API). L6 "Show my latency" unvalidated route-param fetch → https/length guard +
+    `credentials: 'omit'` (`ac7c174`). L7 stale `pendingAutoWatchRef` auto-watch →
+    `usePendingAutoWatch(url, isLoggedIn, onAutoWatch)` hook (URL-pinned, timestamped, 60s
+    TTL, dropped on route change / Cancel) (`ac7c174`).
+  - **Hardening follow-ups** — atomic notification cooldown (`dc4d993`, see
+    `notifySubscribers` below); NIP-98 single-use nonce cache (`da7c46d`, see Backend API);
+    `script-src` drops `'unsafe-inline'` (`32abfa9`, see the nginx CSP gotcha);
+    `discovery.ts` + `versionCatalog.ts` routed through `safeFetch` (`11c30f1`, see
+    Discovery pipeline); 4 low-risk items in `3c8867f` (navbar avatar `https://` scheme
+    guard; `deploy/nginx.conf` OG map regex `[^/?]+` → `[^/?&#]+`; comment that
+    discovery/reviews `SimplePool` is NOT DNS-pinned and only safe because its relay lists
+    are hardcoded constants). Community Rating sybil mitigation (disclaimer + `InfoTooltip`
+    + `reviewSurge` flag) — see "Reviews Feature" (`a07404b`, `e2b04be`).
+  - **User Qs cleared:** NUT-07 checkstate is button-only and leaks no proof secret
+    (cashu-ts `NullLogger`, `/v1/checkstate` sends only `hashToCurve(secret)`); a mint
+    can't appear "watched" before real auth; nsec never persisted/logged; SQL fully
+    parameterized; OG fragment XSS-safe.
+
+#### Watchlist sync + relay bootstrap hardening (2026-09-07, audit M4/M5/M6, commit `5ff2b8d`)
+
+- **M4 — `useWatchlistSync.doSync()`** captured `pubkey` at effect time and never re-checked
+  it after `await fetchRemoteWatchlist()`; a logout+login of a different user on the same
+  device mid-fetch let user A's remote list be written to Dexie and re-published as user B's
+  own kind:10003. Now re-reads `useAuthStore.getState().profile?.pubkey` after every `await`
+  and discards the result untouched if it changed; the `isSyncing` guard is only released by
+  the run that still owns the active identity.
+- **M5 — `fetchRemoteWatchlist()`** took the first relay to answer (`Promise.any`) with no
+  `created_at` comparison, so a lagging/stale relay silently rolled the watchlist back and
+  Phase 2 re-published the older revision. Now **collects** events across relays within the
+  wait window (all-settled, or a short grace after the first event, capped at the existing
+  3s) and keeps the highest `created_at`; also drops events whose `pubkey` != the user (a
+  relay ignoring the `authors` filter).
+- **M6 — `bootstrapUserData()` / `subscribeFirstEvent()`** acted on the first kind:0 /
+  kind:10002 a relay returned, checking only `verifyEvent()` (signature self-consistency,
+  not ownership). A hostile relay in `META_RELAYS` could set the victim's displayed
+  name/avatar and swap in an attacker-controlled NIP-65 relay list, redirecting outbound
+  watchlist/DM traffic. Now pins `ev.pubkey === expectedPubkey` before use.
+- Tests: `src/__tests__/{watchlistSync,bootstrapUserData,useWatchlistSync}.test.ts` +
+  an e2e case in `watchlist-sync-status.spec.ts`.
 
 ## Dependency versions (as of 2026-06-29)
 
@@ -683,6 +761,15 @@ Two desktop-layout attempts for the Tools page (`Tools.css`/`Tools.tsx`) were tr
   `TokenSpentCheck`. A button in the inspector result triggers this on demand (not automatic
   — doing so tells the mint someone is checking that specific token right now, which the UI
   discloses via a tooltip).
+- **`assertProbeableMintUrl()` (`src/utils/cashuToken.ts`, 2026-09-07 audit L4)** — both
+  `decodeTokenWithMint()` and `checkTokenSpentState()` call it before `new Wallet(mint)`.
+  `info.mint` comes from a fully attacker-controlled pasted token and was handed straight to
+  cashu-ts (no host/scheme allowlist), so a crafted token could make the victim's browser
+  hit `http://localhost:9200`, `javascript:`, or an internal IP. The guard requires
+  `https://`, length ≤ 500, and a public host (rejects loopback / RFC1918 / link-local /
+  CGNAT / IPv6 loopback+ULA+link-local) — same policy as `core/mint/api.ts`'s `validateUrl()`
+  and the MintDetail "Test latency" guard. Throws a typed `InvalidMintUrlError`; `Tools.tsx`
+  renders it as a distinct `"bad-mint-url"` result and makes **no** network request.
 - **`InfoTooltip`** (`src/components/InfoTooltip.tsx` + co-located `.css`) — the shared ⓘ
   hover-on-desktop / tap-on-mobile tooltip (`text` / `width` / `iconSize` / `className` props;
   wraps `useTapTooltip`; popup is `role="tooltip"` with its own `.info-tooltip-pop` styling so
