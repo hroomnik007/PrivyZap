@@ -2,21 +2,6 @@ import { pool } from './db.js'
 import { safeFetch } from './ssrf.js'
 import { normalizeUrl } from './discovery.js'
 
-// ── TEMPORARY DIAGNOSTIC LOGGING (remove after investigation) ──────────
-// Added to make the exact reason a mint favicon fetch fails visible in prod
-// logs (every failure currently collapses to `null` -> 404 -> frontend monogram).
-// Remove this block and every `iconDiag(...)` call site once we have enough data.
-function stripLog(s: string): string {
-  // eslint-disable-next-line no-control-regex
-  return String(s).replace(/[\u0000-\u001f\u007f]/g, '\uFFFD').slice(0, 300)
-}
-function iconDiag(mintUrl: string, iconUrl: string | null | undefined, reason: string): void {
-  console.warn(
-    `[mint-icon-diag] FAIL mint=${stripLog(mintUrl)} icon_url=${stripLog(iconUrl ?? '<null>')} reason=${stripLog(reason)}`,
-  )
-}
-// ── END TEMPORARY DIAGNOSTIC LOGGING ──────────────────────────────────
-
 // SSRF-safe mint favicon proxy.
 //
 // The frontend must never fetch a mint-controlled `icon_url` directly: that URL
@@ -36,7 +21,14 @@ function iconDiag(mintUrl: string, iconUrl: string | null | undefined, reason: s
 
 const CACHE_TTL_MS = 6 * 60 * 60 * 1000   // 6h for a resolved icon
 const NEGATIVE_TTL_MS = 30 * 60 * 1000    // 30min for "no icon / unfetchable" — self-heals
-const MAX_ICON_BYTES = 256 * 1024         // 256 KB
+// 512 KB. Raised from 256 KB (2026-09-08): a diagnostic run showed 5 of 65
+// favicon failures were legitimate operator logos rejected purely for size.
+// 512 KB comfortably covers a high-res PNG logo while still bounding worst-case
+// memory (MAX_CACHE_ENTRIES * 512 KB). The handful of mints shipping a 1–2 MB
+// image as their favicon still fall back to the monogram — re-encoding them
+// server-side would mean a native image dependency (sharp), which is not worth
+// it for that few mints with an unreasonably large asset.
+const MAX_ICON_BYTES = 512 * 1024
 const MAX_CACHE_ENTRIES = 500
 
 // SVG is deliberately excluded. An <img> never runs an SVG's scripts, but a
@@ -69,60 +61,84 @@ export function _resetMintIconCache(): void {
   cache.clear()
 }
 
+/**
+ * Magic-bytes fallback for when a mint serves a real raster image under a
+ * wrong or generic Content-Type (the diagnostic run found several mints, e.g.
+ * cashu.cz and mint.chorus.community, sending `application/octet-stream` for a
+ * genuine .webp / .jpg). Returns the sniffed content type for a *supported*
+ * raster format, or null.
+ *
+ * SVG is explicitly rejected here too — even though it has no binary signature
+ * to match, an XML/SVG payload must never pass this path (M1: a direct
+ * navigation to the proxy would render it as a document on our own origin).
+ */
+export function sniffRasterImageType(buf: Buffer): string | null {
+  if (buf.length < 4) return null
+
+  // Reject anything that looks like XML/SVG before the signature checks.
+  const head = buf.toString('latin1', 0, 256).trimStart().toLowerCase()
+  if (head.startsWith('<?xml') || head.startsWith('<svg') || head.includes('<svg')) {
+    return null
+  }
+
+  // PNG — 89 50 4E 47 0D 0A 1A 0A
+  if (
+    buf.length >= 8 &&
+    buf[0] === 0x89 && buf[1] === 0x50 && buf[2] === 0x4e && buf[3] === 0x47 &&
+    buf[4] === 0x0d && buf[5] === 0x0a && buf[6] === 0x1a && buf[7] === 0x0a
+  ) {
+    return 'image/png'
+  }
+
+  // JPEG — FF D8 FF
+  if (buf[0] === 0xff && buf[1] === 0xd8 && buf[2] === 0xff) {
+    return 'image/jpeg'
+  }
+
+  // GIF — "GIF8" (47 49 46 38), i.e. GIF87a / GIF89a
+  if (buf[0] === 0x47 && buf[1] === 0x49 && buf[2] === 0x46 && buf[3] === 0x38) {
+    return 'image/gif'
+  }
+
+  // WebP — "RIFF" .... "WEBP"
+  if (
+    buf.length >= 12 &&
+    buf.toString('latin1', 0, 4) === 'RIFF' &&
+    buf.toString('latin1', 8, 12) === 'WEBP'
+  ) {
+    return 'image/webp'
+  }
+
+  return null
+}
+
 async function fetchMintIcon(mintUrl: string): Promise<MintIcon | null> {
   const result = await pool.query('SELECT icon_url FROM mints WHERE url = $1', [mintUrl])
-  if (result.rows.length === 0) {
-    iconDiag(mintUrl, undefined, 'not a known mint (no row in mints)')
-    return null // not a known mint — refuse to proxy
-  }
+  if (result.rows.length === 0) return null // not a known mint — refuse to proxy
 
   const iconUrl = result.rows[0]?.['icon_url'] as string | null | undefined
-  if (typeof iconUrl !== 'string' || !iconUrl.startsWith('https://')) {
-    iconDiag(mintUrl, iconUrl, typeof iconUrl !== 'string' ? 'icon_url is null/absent in DB' : 'icon_url is not https://')
-    return null
-  }
+  if (typeof iconUrl !== 'string' || !iconUrl.startsWith('https://')) return null
 
-  let networkErr: unknown
-  const res = await safeFetch(iconUrl, {
-    timeoutMs: 5_000,
-    onError: (err) => { networkErr = err },
-  })
-  if (!res) {
-    if (networkErr !== undefined) {
-      const e = networkErr as { name?: string; code?: string; message?: string; cause?: { code?: string; message?: string } }
-      iconDiag(
-        mintUrl,
-        iconUrl,
-        `network error: name=${e?.name ?? '?'} code=${e?.code ?? e?.cause?.code ?? '?'} message=${e?.message ?? String(networkErr)}`,
-      )
-    } else {
-      iconDiag(mintUrl, iconUrl, 'safeFetch returned null with no network error (SSRF/private-range block, redirect chain > 3 hops, or a 3xx with no Location header)')
-    }
-    return null
-  }
-  if (!res.ok) {
-    iconDiag(mintUrl, iconUrl, `non-2xx status: HTTP ${res.status}`)
-    return null
-  }
+  const res = await safeFetch(iconUrl, { timeoutMs: 5_000 })
+  if (!res || !res.ok) return null
 
-  const rawContentType = res.headers.get('content-type') ?? ''
-  const contentType = rawContentType.split(';')[0]!.trim().toLowerCase()
-  if (!ALLOWED_CONTENT_TYPES.has(contentType)) {
-    iconDiag(mintUrl, iconUrl, `content-type not in allow-list: got "${rawContentType}" (normalised "${contentType}")`)
-    return null
-  }
+  const declaredType = (res.headers.get('content-type') ?? '').split(';')[0]!.trim().toLowerCase()
 
   const declaredLen = Number(res.headers.get('content-length') ?? '0')
-  if (Number.isFinite(declaredLen) && declaredLen > MAX_ICON_BYTES) {
-    iconDiag(mintUrl, iconUrl, `oversize by Content-Length header: ${declaredLen} bytes > ${MAX_ICON_BYTES}`)
-    return null
-  }
+  if (Number.isFinite(declaredLen) && declaredLen > MAX_ICON_BYTES) return null
 
   const body = Buffer.from(await res.arrayBuffer())
-  if (body.byteLength === 0 || body.byteLength > MAX_ICON_BYTES) {
-    iconDiag(mintUrl, iconUrl, body.byteLength === 0 ? 'empty response body (0 bytes)' : `oversize actual body: ${body.byteLength} bytes > ${MAX_ICON_BYTES}`)
-    return null
+  if (body.byteLength === 0 || body.byteLength > MAX_ICON_BYTES) return null
+
+  // Trust an allow-listed declared type; otherwise fall back to sniffing the
+  // leading bytes (a mint serving a real image under application/octet-stream).
+  let contentType: string | null
+  if (ALLOWED_CONTENT_TYPES.has(declaredType)) {
+    contentType = declaredType
+  } else {
+    contentType = sniffRasterImageType(body)
   }
+  if (!contentType) return null
 
   return { body, contentType }
 }
@@ -143,10 +159,7 @@ export async function getMintIcon(rawMintUrl: string): Promise<MintIcon | null> 
   let icon: MintIcon | null
   try {
     icon = await fetchMintIcon(mintUrl)
-  } catch (err) {
-    // TEMPORARY diagnostic — see block at top of file.
-    const e = err as { name?: string; message?: string }
-    iconDiag(mintUrl, undefined, `fetchMintIcon threw: name=${e?.name ?? '?'} message=${e?.message ?? String(err)}`)
+  } catch {
     icon = null
   }
 
