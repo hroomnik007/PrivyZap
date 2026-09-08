@@ -45,6 +45,12 @@
   line-height: 1.5;
 }
 
+.wizard-disclaimer {
+  font-size: 12px;
+  color: var(--text2);
+  line-height: 1.45;
+}
+
 .tool-btn-primary {
   width: 100%;
   padding: 10px;
@@ -515,6 +521,29 @@
   font-family: var(--font-mono);
   flex-shrink: 0;
 }
+
+/* Result-row badges — same visual language as the Dashboard mint card's
+   Trust pill (shield + "Trust N") and LN chip. */
+.wizard-rec-badges {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  flex-shrink: 0;
+}
+.wizard-rec-trust,
+.wizard-rec-ln {
+  display: inline-flex;
+  align-items: center;
+  gap: 3px;
+  font-size: 11px;
+  font-family: var(--font-mono-data);
+  background: var(--elevated);
+  border: 1px solid var(--brd);
+  border-radius: 4px;
+  padding: 1px 6px;
+  white-space: nowrap;
+}
+.wizard-rec-ln { color: var(--t3); }
 
 .wizard-rec-view {
   font-size: 11px;

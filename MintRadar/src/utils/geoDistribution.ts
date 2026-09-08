@@ -19,6 +19,19 @@ export interface GeoDistMintInput {
   serverLocation?: string | null
 }
 
+// A GeoIP hit that resolves to a CDN / cloud provider / anycast edge tells us
+// nothing about where the mint actually runs — and several such labels
+// ("Cloudflare CDN", an AWS region, "anycast", …) would otherwise each get
+// their own tiny row. Collapse them into one "CDN / anycast" bucket at
+// display/aggregation time. (The GeoIP lookup itself is unchanged.)
+export const CDN_BUCKET = 'CDN / anycast'
+const CDN_RE = /cloudflare|\bcdn\b|\baws\b|amazon|\banycast\b|akamai|fastly|\bgcp\b|google cloud|azure|edgecast|bunny|stackpath|cloudfront/i
+
+export function normalizeGeoLoc(loc: string | null | undefined): string {
+  const l = loc ?? 'Unknown'
+  return CDN_RE.test(l) ? CDN_BUCKET : l
+}
+
 // Buckets online mints by serverLocation, sorted by count descending, and
 // splits the result into the top N (for the panel's bars) plus everything
 // that didn't make the cut. The "Unknown" bucket (mints with no
@@ -30,7 +43,7 @@ export function computeGeoDistribution(mints: GeoDistMintInput[], topN = 8): Geo
   const counts = new Map<string, number>()
   for (const m of mints) {
     if (m.online !== true) continue
-    const loc = m.serverLocation ?? 'Unknown'
+    const loc = normalizeGeoLoc(m.serverLocation)
     counts.set(loc, (counts.get(loc) ?? 0) + 1)
   }
   const total = [...counts.values()].reduce((a, b) => a + b, 0)

@@ -9,7 +9,7 @@ import { useKnownMints, type KnownMint } from '@/hooks/useKnownMints'
 import { TRACKED_NUTS, NUT_META } from '@/constants/nuts'
 import { trustColor, trustScoreInfo, trustDonutArc, displayName } from '@/utils/mintFormatting'
 import { isTestMint } from '@/constants/testMints'
-import { computeGeoDistribution } from '@/utils/geoDistribution'
+import { computeGeoDistribution, normalizeGeoLoc, CDN_BUCKET } from '@/utils/geoDistribution'
 import { useTapTooltip } from '@/hooks/useTapTooltip'
 import { useIsMobile } from '@/hooks/useIsMobile'
 import './Stats.css'
@@ -58,7 +58,7 @@ function shortenCity(city: string): string {
 }
 
 function geoLabel(loc: string): { display: string; flag: string; color?: string } {
-  if (loc === 'Cloudflare CDN') return { display: 'Cloudflare CDN', flag: '🌐', color: '#f59e0b' }
+  if (loc === CDN_BUCKET || loc === 'Cloudflare CDN') return { display: CDN_BUCKET, flag: '🌐', color: '#f59e0b' }
   if (loc === 'Unknown') return { display: 'Geolocation unavailable', flag: '' }
   const commaIdx = loc.lastIndexOf(', ')
   if (commaIdx === -1) return { display: shortenCity(loc), flag: '' }
@@ -604,6 +604,8 @@ export default function Stats() {
   const nhiInfoTooltip = useTapTooltip(nhiInfoRef)
   const uptimeInfoRef = useRef<HTMLSpanElement>(null)
   const uptimeInfoTooltip = useTapTooltip(uptimeInfoRef)
+  const swBehindInfoRef = useRef<HTMLSpanElement>(null)
+  const swBehindInfoTooltip = useTapTooltip(swBehindInfoRef)
   // Same 768px breakpoint as the rest of the app's mobile/desktop split (see
   // useIsMobile.ts). Desktop shows the breakdown inline in the panel itself
   // (no reason to click through to a modal that would show the exact same
@@ -647,7 +649,10 @@ export default function Stats() {
   const top5ByUptime = useMemo(() => {
     if (!knownMintsData) return []
     return [...knownMintsData]
-      .filter(m => m.online === true && m.uptimePct24h != null)
+      // Test/dev mints are excluded from this "best of" list (same as the
+      // Best Mint wizard and the backend's top5ByTrustScore) — they're still
+      // tracked and visible everywhere else. Trust tab is left untouched.
+      .filter(m => m.online === true && m.uptimePct24h != null && !isTestMint(m.url))
       .sort((a, b) => (b.uptimePct24h ?? 0) - (a.uptimePct24h ?? 0))
       .slice(0, 5)
   }, [knownMintsData])
@@ -669,7 +674,7 @@ export default function Stats() {
 
   const cityMints = useMemo(() => {
     if (!cityModal || !knownMintsData) return []
-    return knownMintsData.filter(m => (m.serverLocation ?? 'Unknown') === cityModal)
+    return knownMintsData.filter(m => normalizeGeoLoc(m.serverLocation) === cityModal)
   }, [cityModal, knownMintsData])
 
   interface TrustTrendResponse {
@@ -943,7 +948,24 @@ export default function Stats() {
                 {swFreshnessSummary.total > 0 && (
                   <div>
                     <div style={{display:'flex',justifyContent:'space-between',alignItems:'baseline',marginBottom:4}}>
-                      <span style={{fontSize:12,color:'var(--text2)'}}>Running outdated or older versions</span>
+                      <span style={{fontSize:12,color:'var(--text2)',display:'inline-flex',alignItems:'center',gap:4}}>
+                        Behind current release
+                        <span
+                          ref={swBehindInfoRef}
+                          className="stats-sw-behind-info"
+                          style={{ position: 'relative', display: 'inline-flex' }}
+                          onPointerEnter={swBehindInfoTooltip.onPointerEnter}
+                          onPointerLeave={swBehindInfoTooltip.onPointerLeave}
+                          onClick={swBehindInfoTooltip.onClick}
+                        >
+                          <Info size={11} color="#6b7280" style={{ flexShrink: 0, cursor: 'help' }} />
+                          {swBehindInfoTooltip.open && (
+                            <div className="audit-tooltip audit-tooltip-down" style={{ width: isMobile ? 210 : 250, left: 0 }}>
+                              We compare the version each mint reports to the latest known release for that implementation — not a CVE or security score.
+                            </div>
+                          )}
+                        </span>
+                      </span>
                       <span style={{fontSize:13,fontWeight:swFreshnessSummary.pct >= 50 ? 700 : 600,color:'var(--amber)',fontFamily:'var(--font-mono-data)'}}>{swFreshnessSummary.pct}%</span>
                     </div>
                     <div className="dist-track"><div className="dist-fill" style={{width:`${swFreshnessSummary.pct}%`,background:'var(--amber)',opacity:swFreshnessSummary.pct >= 50 ? 0.9 : 0.6}} /></div>
@@ -1043,11 +1065,10 @@ export default function Stats() {
                     <MintFavicon url={mint.url} iconUrl={mint.iconUrl} size={22} />
                     <div style={{flex:1,minWidth:0}}>
                       <div style={{fontSize:12,fontWeight:500,color:'var(--text)',whiteSpace:'nowrap',overflow:'hidden',textOverflow:'ellipsis'}}>{displayName(mint)}</div>
-                      <div style={{fontSize:10,color:'var(--text3)',fontFamily:'var(--font-mono)',whiteSpace:'nowrap',overflow:'hidden',textOverflow:'ellipsis'}}>{hostname}</div>
+                      {displayName(mint) !== hostname && (
+                        <div style={{fontSize:10,color:'var(--text3)',fontFamily:'var(--font-mono)',whiteSpace:'nowrap',overflow:'hidden',textOverflow:'ellipsis'}}>{hostname}</div>
+                      )}
                     </div>
-                    {isTestMint(mint.url) && (
-                      <span style={{fontSize:9,fontFamily:'var(--font-mono)',color:'var(--amber)',background:'var(--amber-soft)',border:'1px solid var(--amber-soft-strong)',borderRadius:4,padding:'1px 5px',flexShrink:0}} title="Not for real funds — for testing and development only">🧪 Test</span>
-                    )}
                     <span style={{fontSize:12,fontFamily:'var(--font-mono)',fontWeight:700,color,flexShrink:0}}>{uptime}%</span>
                   </div>
                 )
@@ -1065,7 +1086,9 @@ export default function Stats() {
                     <MintFavicon url={mint.url} iconUrl={mint.iconUrl} size={22} />
                     <div style={{flex:1,minWidth:0}}>
                       <div style={{fontSize:12,fontWeight:500,color:'var(--text)',whiteSpace:'nowrap',overflow:'hidden',textOverflow:'ellipsis'}}>{displayName(mint)}</div>
-                      <div style={{fontSize:10,color:'var(--text3)',fontFamily:'var(--font-mono)',whiteSpace:'nowrap',overflow:'hidden',textOverflow:'ellipsis'}}>{hostname}</div>
+                      {displayName(mint) !== hostname && (
+                        <div style={{fontSize:10,color:'var(--text3)',fontFamily:'var(--font-mono)',whiteSpace:'nowrap',overflow:'hidden',textOverflow:'ellipsis'}}>{hostname}</div>
+                      )}
                     </div>
                     {isTestMint(mint.url) && (
                       <span style={{fontSize:9,fontFamily:'var(--font-mono)',color:'var(--amber)',background:'var(--amber-soft)',border:'1px solid var(--amber-soft-strong)',borderRadius:4,padding:'1px 5px',flexShrink:0}} title="Not for real funds — for testing and development only">🧪 Test</span>

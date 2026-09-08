@@ -826,7 +826,12 @@ function MintDetailContent({ url }: { url: string }) {
                 }}
                 title="Copy a direct link to this mint"
               >
-                <span>{url}</span>
+                <span>
+                  {mintHostname(url).toLowerCase().endsWith('.onion') && (
+                    <span className="md-url-tor" title="Tor hidden service — reachable only over the Tor network">Tor</span>
+                  )}
+                  {url}
+                </span>
                 {copiedLink ? <Check size={12} /> : <Copy size={12} />}
               </button>
               {firstSeen && (

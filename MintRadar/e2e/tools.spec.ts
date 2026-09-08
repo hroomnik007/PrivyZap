@@ -272,6 +272,24 @@ test.describe('Tools', () => {
     await expect(page.locator('.token-result-grid')).toHaveCount(0)
   })
 
+  test('Best Mint Wizard carries the "not an endorsement" disclaimer under the heading', async ({ page }) => {
+    await expect(page.locator('.wizard-disclaimer')).toHaveText('Suggestions from our measurements, not an endorsement.')
+  })
+
+  test('Best Mint Wizard result rows use the card Trust formatting (shield + "Trust N")', async ({ page }) => {
+    await page.locator('.wizard-unit-select').selectOption('sat')
+    await page.locator('.wizard-opt', { hasText: 'Small' }).click()
+    await page.locator('.wizard-opt', { hasText: 'Speed' }).click()
+    await page.locator('.wizard-opt', { hasText: 'Not sure' }).click()
+    await page.getByRole('button', { name: /Find my mints/ }).click()
+
+    const firstRow = page.locator('.wizard-rec-row').first()
+    await expect(firstRow).toBeVisible({ timeout: 15_000 })
+    await expect(firstRow.locator('.wizard-rec-trust')).toContainText(/^Trust \d+$/)
+    await expect(firstRow.locator('.wizard-rec-trust svg')).toBeVisible() // the shield
+    await expect(firstRow.locator('.wizard-rec-score')).toHaveCount(0)    // no bare "NN%"
+  })
+
   test('Best Mint Wizard walks through its questions and recommends mints', async ({ page }) => {
     // Step 1 — currency, then how much to store (the latter auto-advances to step 2).
     await expect(page.locator('.wizard-unit-select')).toBeVisible()

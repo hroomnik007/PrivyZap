@@ -6,7 +6,8 @@ import { IcShield } from '@/components/mint/IcShield'
 import { InfoTooltip } from '@/components/InfoTooltip'
 import { useNow } from '@/hooks/useNow'
 import { parseCashuToken, formatTokenAmount, decodeTokenWithMint, checkTokenSpentState, InvalidMintUrlError, type TokenInfo, type TokenSpentCheck } from '@/utils/cashuToken'
-import { normalizeMintUrl, trustColor, trustScoreInfo, mintRiskLevel } from '@/utils/mintFormatting'
+import { normalizeMintUrl, trustColor, trustScoreInfo, mintRiskLevel, displayName as mintDisplayName, cardTrustLabel, cardLightningLabel } from '@/utils/mintFormatting'
+import { Zap } from 'lucide-react'
 import { isTestMint } from '@/constants/testMints'
 import './Tools.css'
 
@@ -523,12 +524,11 @@ function BestMintWizard({ knownMints }: { knownMints: KnownMint[] }) {
     setFinding(false)
   }
 
-  const scoreColor = (s: number) => s >= 70 ? '#4ade80' : s >= 40 ? '#f59e0b' : '#E24B4A'
-
   return (
     <div className="tool-card">
       <div className="tool-header">
         <div className="tool-title">Best Mint for Me</div>
+        <div className="wizard-disclaimer">Suggestions from our measurements, not an endorsement.</div>
         <div className="tool-subtitle">Answer a few quick questions and we'll recommend the best mints for your needs · latency measured from your browser</div>
       </div>
 
@@ -631,8 +631,9 @@ function BestMintWizard({ knownMints }: { knownMints: KnownMint[] }) {
             <div className="wizard-no-results">No online mint supports {recsUnit} with the options you picked. Try another currency or change your answers.</div>
           ) : (
             recs.map((rec, idx) => {
-              const hostname = getHostname(rec.url)
-              const score = rec.mint.trustScore ?? 0
+              const trustNum = rec.mint.trustScore ?? null
+              const trustCol = trustNum == null ? 'var(--t3)' : trustNum >= 70 ? 'var(--green-bright)' : trustNum >= 40 ? 'var(--amber)' : 'var(--red)'
+              const lnLabel = cardLightningLabel(rec.mint)
               const unitLabel = recsUnit ?? ''
               const mintRange = formatLimits(rec.mintLimits, unitLabel)
               const meltRange = formatLimits(rec.meltLimits, unitLabel)
@@ -641,7 +642,7 @@ function BestMintWizard({ knownMints }: { knownMints: KnownMint[] }) {
                   <span className="wizard-rank">#{idx + 1}</span>
                   <MintFavicon url={rec.url} iconUrl={rec.mint.iconUrl ?? null} size={28} radius={6} />
                   <div className="wizard-rec-info">
-                    <div className="wizard-rec-name">{rec.mint.name ?? hostname}</div>
+                    <div className="wizard-rec-name">{mintDisplayName(rec.mint)}</div>
                     <div className="wizard-rec-meta">
                       {rec.latencyMs != null && <span>{rec.latencyMs}ms from your location</span>}
                       {rec.mint.uptimePct24h != null && <span>· {rec.mint.uptimePct24h}% uptime</span>}
@@ -659,7 +660,16 @@ function BestMintWizard({ knownMints }: { knownMints: KnownMint[] }) {
                       )}
                     </div>
                   </div>
-                  <span className="wizard-rec-score" style={{ color: scoreColor(score) }}>{score}%</span>
+                  <span className="wizard-rec-badges">
+                    <span className="wizard-rec-trust" style={{ color: trustCol }}>
+                      <IcShield size={11} /><span>{cardTrustLabel(trustNum)}</span>
+                    </span>
+                    {lnLabel && (
+                      <span className="wizard-rec-ln">
+                        <Zap size={10} aria-hidden /><span>{lnLabel}</span>
+                      </span>
+                    )}
+                  </span>
                   <span className="wizard-rec-view">View →</span>
                 </div>
               )

@@ -110,17 +110,6 @@
   height: 18px;
 }
 
-/* Caps platform label sitting next to the icon in the top row — mirrors
-   .learn-card-number ("MODULE N"). */
-.wallet-platform-label {
-  font-size: 10px;
-  font-weight: 600;
-  color: var(--copper);
-  text-transform: uppercase;
-  letter-spacing: 0.08em;
-  font-family: var(--font-mono);
-}
-
 /* Title on its own row below the head — mirrors .learn-card-title. */
 .wallet-name {
   font-size: 16px;
@@ -171,6 +160,30 @@
   font-family: var(--font-mono);
 }
 
+/* ── "Run your own mint" — self-host section below the wallet grid ── */
+.wallets-selfhost {
+  max-width: 1600px;
+  margin: 8px auto 0;
+  padding: 8px 24px 4px;
+}
+.wallets-selfhost-title {
+  font-size: 15px;
+  font-weight: 600;
+  color: var(--text);
+  letter-spacing: -0.01em;
+}
+.wallets-selfhost-sub {
+  margin-top: 3px;
+  font-size: 12px;
+  color: var(--text3);
+  font-family: var(--font-mono);
+}
+.wallets-grid-selfhost {
+  padding-left: 0;
+  padding-right: 0;
+  margin-top: 12px;
+}
+
 /* Breakpoint + single-column collapse matched to .learn-grid's @media(700px). */
 @media (max-width: 700px) {
   .wallets-header {
@@ -187,6 +200,8 @@
     padding: 12px 16px;
     gap: 12px;
   }
+  .wallets-selfhost { padding-left: 16px; padding-right: 16px; }
+  .wallets-grid-selfhost { padding-left: 0; padding-right: 0; }
   .wallets-footnote {
     padding-left: 16px;
     padding-right: 16px;

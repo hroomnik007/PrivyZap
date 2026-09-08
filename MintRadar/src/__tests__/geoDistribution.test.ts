@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest'
-import { computeGeoDistribution, type GeoDistMintInput } from '../utils/geoDistribution'
+import { computeGeoDistribution, normalizeGeoLoc, CDN_BUCKET, type GeoDistMintInput } from '../utils/geoDistribution'
 
 function onlineMints(locations: (string | null)[]): GeoDistMintInput[] {
   return locations.map(loc => ({ online: true, serverLocation: loc }))
@@ -100,5 +100,33 @@ describe('computeGeoDistribution', () => {
       expect(reconciled).toBe(result.total)
       expect(result.total).toBe(locs.length)
     }
+  })
+})
+
+describe('normalizeGeoLoc — CDN / anycast bucketing', () => {
+  it('collapses provider / CDN / anycast labels into one bucket', () => {
+    for (const loc of ['Cloudflare CDN', 'AWS us-east-1', 'Amazon, US', 'anycast', 'Fastly edge', 'Akamai', 'Google Cloud, US', 'Azure East US', 'CloudFront']) {
+      expect(normalizeGeoLoc(loc)).toBe(CDN_BUCKET)
+    }
+  })
+
+  it('leaves a real city untouched', () => {
+    expect(normalizeGeoLoc('Frankfurt, DE')).toBe('Frankfurt, DE')
+    expect(normalizeGeoLoc('Helsinki, FI')).toBe('Helsinki, FI')
+  })
+
+  it('maps null / undefined / "Unknown" to "Unknown"', () => {
+    expect(normalizeGeoLoc(null)).toBe('Unknown')
+    expect(normalizeGeoLoc(undefined)).toBe('Unknown')
+    expect(normalizeGeoLoc('Unknown')).toBe('Unknown')
+  })
+
+  it('computeGeoDistribution merges several CDN labels into a single row', () => {
+    const result = computeGeoDistribution(
+      onlineMints(['Cloudflare CDN', 'AWS eu-west-1', 'anycast', 'Frankfurt, DE', 'Frankfurt, DE']),
+    )
+    const cdnRow = result.top.find(r => r.loc === CDN_BUCKET)
+    expect(cdnRow?.count).toBe(3)
+    expect(result.top.filter(r => r.loc === CDN_BUCKET)).toHaveLength(1)
   })
 })

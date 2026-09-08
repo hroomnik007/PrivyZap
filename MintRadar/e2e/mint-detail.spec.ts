@@ -123,6 +123,20 @@ test.describe('Mint Detail — /mint/:url canonicalisation (bare-host collision 
     expect(page.url()).not.toBe(alphaUrl)
   })
 
+  test('an onion mint URL is prefixed with a "Tor" label (not hidden, not merged)', async ({ page }) => {
+    const { MOCK_KNOWN_MINTS } = await import('./fixtures/mocks')
+    const onionUrl = 'https://mintxyzabc234onionaddress0000000000000000000000000000000.onion'
+    await page.route('**/api/mints/known', r => r.fulfill({
+      json: [...MOCK_KNOWN_MINTS, { ...MOCK_KNOWN_MINTS[0], url: onionUrl, name: 'Onion Mint', online: true }],
+    }))
+    await page.goto(`/mint/${encodeURIComponent(onionUrl)}`)
+    await expect(page.locator('.md-tabs')).toBeVisible()
+
+    const urlBtn = page.locator('button.md-url-copy')
+    await expect(urlBtn.locator('.md-url-tor')).toHaveText('Tor')
+    await expect(urlBtn).toContainText(onionUrl) // the full onion URL is still shown
+  })
+
   test('an unknown host shows the "Not a tracked mint" state, not a 3% ghost', async ({ page }) => {
     await page.goto('/mint/definitely-not-a-real-mint.example')
     await expect(page.locator('.md-not-tracked')).toBeVisible()

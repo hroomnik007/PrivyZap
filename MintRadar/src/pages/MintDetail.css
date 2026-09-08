@@ -96,6 +96,20 @@ button.md-url-copy {
   transition: color var(--transition);
 }
 button.md-url-copy > span { word-break: break-all; }
+.md-url-tor {
+  display: inline-block;
+  margin-right: 6px;
+  padding: 0 5px;
+  font-size: 10px;
+  font-weight: 700;
+  letter-spacing: 0.04em;
+  color: var(--copper);
+  background: var(--copper-soft);
+  border: 1px solid var(--copper-soft-strong);
+  border-radius: 4px;
+  vertical-align: 1px;
+  word-break: keep-all;
+}
 button.md-url-copy > svg { flex-shrink: 0; opacity: 0.6; }
 button.md-url-copy:hover { color: var(--text2); }
 button.md-url-copy:hover > svg { opacity: 1; }

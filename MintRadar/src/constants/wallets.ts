@@ -18,6 +18,8 @@ export interface WalletInfo {
   blurb: string
   /** Absolute https:// link to the wallet's homepage or repo. */
   url: string
+  /** Shown in the "Run your own mint" section below the wallet grid, not in it. */
+  selfHost?: boolean
 }
 
 export const WALLETS: WalletInfo[] = [
@@ -74,5 +76,6 @@ export const WALLETS: WalletInfo[] = [
     platforms: ['CLI'],
     blurb: 'The reference Python implementation, including a command-line wallet handy for scripting and running your own mint.',
     url: 'https://github.com/cashubtc/nutshell',
+    selfHost: true,
   },
 ]

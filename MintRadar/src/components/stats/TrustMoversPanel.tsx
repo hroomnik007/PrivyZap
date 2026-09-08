@@ -73,12 +73,15 @@ export function TrustMoversPanel({ period, onPeriodChange, data, loading, refres
     }
     return movers.map(m => {
       const hostname = getHostname(m.url)
+      const name = getDisplayName(m)
       return (
         <div key={m.url} className="stats-top5-row" onClick={() => onMintClick(m.url)}>
           <MintFavicon url={m.url} iconUrl={getIconUrl(m)} size={22} />
           <div style={{ flex: 1, minWidth: 0 }}>
-            <div style={{ fontSize: 12, fontWeight: 500, color: 'var(--text)', whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }}>{getDisplayName(m)}</div>
-            <div style={{ fontSize: 10, color: 'var(--text3)', fontFamily: 'var(--font-mono)', whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }}>{hostname}</div>
+            <div style={{ fontSize: 12, fontWeight: 500, color: 'var(--text)', whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }}>{name}</div>
+            {name !== hostname && (
+              <div style={{ fontSize: 10, color: 'var(--text3)', fontFamily: 'var(--font-mono)', whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }}>{hostname}</div>
+            )}
           </div>
           <span className={`stats-movers-delta ${direction}`}>{direction === 'up' ? '+' : ''}{m.delta}%</span>
         </div>

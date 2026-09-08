@@ -1,6 +1,6 @@
 import { lazy, Suspense } from 'react'
 import type { ComponentType, LazyExoticComponent } from 'react'
-import { useParams, useNavigate, Link } from 'react-router-dom'
+import { useParams, useNavigate, Link, Navigate } from 'react-router-dom'
 import { LEARN_MODULES } from '@/constants/learnModules'
 import './LearnModule.css'
 
@@ -24,6 +24,16 @@ export default function LearnModule() {
   const navigate = useNavigate()
 
   const sorted = [...LEARN_MODULES].sort((a, b) => a.order - b.order)
+
+  // Legacy / shareable numeric deep links: /learn/1 … /learn/5 → the slug.
+  // Any other number (0, 6, 99) or unknown slug still falls through to
+  // "Module not found" below.
+  if (moduleId && /^[1-9][0-9]*$/.test(moduleId)) {
+    const n = Number(moduleId)
+    const byOrder = sorted.find(m => m.order === n)
+    if (byOrder) return <Navigate to={`/learn/${byOrder.id}`} replace />
+  }
+
   const index = sorted.findIndex(m => m.id === moduleId)
   const mod = index >= 0 ? sorted[index] : null
   const ModuleComponent = mod ? MODULE_COMPONENTS[mod.id] : null
@@ -58,10 +68,15 @@ export default function LearnModule() {
         ) : <span />}
         {next ? (
           <button type="button" className="learn-nav-btn learn-nav-next" onClick={() => navigate(`/learn/${next.id}`)}>
-            <span className="learn-nav-dir">Next →</span>
+            <span className="learn-nav-dir">Next:</span>
             <span className="learn-nav-title">{next.title}</span>
           </button>
-        ) : <span />}
+        ) : (
+          <button type="button" className="learn-nav-btn learn-nav-next" onClick={() => navigate('/')}>
+            <span className="learn-nav-dir">Done →</span>
+            <span className="learn-nav-title">Browse mints</span>
+          </button>
+        )}
       </div>
     </div>
   )
