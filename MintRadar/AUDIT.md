@@ -197,7 +197,7 @@ _(2026-09-07: the Vite v8 upgrade shipped — both trees are now at 0 vulnerabil
 
 | Header | Value |
 |--------|-------|
-| `Content-Security-Policy` | `default-src 'self'; script-src 'self' 'unsafe-inline'; style-src 'self' 'unsafe-inline'; img-src 'self' https: data:; connect-src 'self' https: wss:;` |
+| `Content-Security-Policy` | `default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline'; img-src 'self' https: data:; connect-src 'self' https: wss:;` |
 | `X-Frame-Options` | `DENY` |
 | `X-Content-Type-Options` | `nosniff` |
 | `Referrer-Policy` | `no-referrer` |
@@ -205,7 +205,7 @@ _(2026-09-07: the Vite v8 upgrade shipped — both trees are now at 0 vulnerabil
 | `Strict-Transport-Security` | `max-age=31536000; includeSubDomains` |
 
 **CSP notes:**
-- `script-src 'self'` — no `'unsafe-eval'`, no CDN scripts. ✅
+- `script-src 'self'` — no `'unsafe-inline'` (removed 2026-09-08), no `'unsafe-eval'`, no CDN scripts. The Vite 8 (rolldown) production build emits only external content-hashed `<script src>` files (app entry + `vite-plugin-pwa`'s `registerSW.js`); no inline `<script>` blocks, no `eval`/`new Function` anywhere in the bundle, so `'unsafe-inline'` was a defensive leftover with nothing relying on it. `style-src 'unsafe-inline'` is kept — React `style={{}}` props and Recharts inject inline styles. ✅
 - `font-src 'self'` — consistent with self-hosted fonts (Google Fonts removed). ✅
 - `img-src ... https:` — required for mint favicons fetched from external mint servers. ✅
 - `connect-src 'self' https: wss:` — `wss:` must be listed explicitly for Nostr relay WebSocket connections. Empirically verified in production: browsers blocked `wss://relay.damus.io/` etc. until `wss:` was added. The earlier assumption that `https:` implicitly covers `wss:` under CSP3 proved incorrect in practice. ✅

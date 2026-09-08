@@ -399,6 +399,19 @@ Login modal (`src/components/layout/AppShell.tsx`) supports three methods select
 
 Current correct value: `connect-src 'self' https: wss:;`
 
+### nginx CSP: `script-src 'self'` — no `'unsafe-inline'`
+
+**GOTCHA — do not re-add `'unsafe-inline'` to `script-src`.** Removed 2026-09-08 (security
+audit run-2 hardening). The Vite 8 (rolldown) production build emits **only external
+content-hashed `<script src>` files** — the app entry plus `vite-plugin-pwa`'s injected
+`<script src="/registerSW.js">`. There are no inline `<script>` blocks in `dist/index.html`,
+no `eval`/`new Function`/`document.write` in the bundle, and `registerSW.js` is a standalone
+file. So `'unsafe-inline'` covered nothing. If a future change needs an inline bootstrap
+script (e.g. flipping `vite-plugin-pwa`'s `injectRegister` to `'inline'`, or an inline theme
+probe), externalise it or move to a nonce/hash — do **not** bring `'unsafe-inline'` back.
+`style-src 'unsafe-inline'` stays (React `style={{}}` + Recharts inject inline styles).
+Full CSP value: `default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline'; img-src 'self' https: data:; connect-src 'self' https: wss:;` — repeated in all 5 spots (server + 4 locations, per the non-inheritance rule below).
+
 ### nginx add_header non-inheritance
 
 **GOTCHA.** When a `location {}` block defines ANY `add_header` directive, it does NOT inherit the parent `server {}` block's `add_header` directives. Security headers (CSP, HSTS, X-Frame-Options, etc.) MUST be repeated verbatim in every `location` block that defines its own `add_header`.
