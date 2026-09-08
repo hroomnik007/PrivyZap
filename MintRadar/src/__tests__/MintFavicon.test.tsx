@@ -31,13 +31,23 @@ describe('MintFavicon', () => {
     )
   })
 
-  it('renders the SVG placeholder (no <img>) when the mint has no icon', () => {
-    const { container } = render(<MintFavicon url="https://mint.example" iconUrl={null} />)
+  it('renders a two-letter hostname monogram (no <img>) when the mint has no icon', () => {
+    const { container } = render(<MintFavicon url="https://minibits.cash" iconUrl={null} />)
     expect(container.querySelector('img')).toBeNull()
-    expect(screen.getByLabelText(/mint icon placeholder/)).toBeInTheDocument()
+    const placeholder = screen.getByLabelText(/mint icon placeholder/)
+    expect(placeholder).toBeInTheDocument()
+    expect(placeholder).toHaveTextContent('MI')
   })
 
-  it('falls back to the SVG placeholder when the proxied image fails to load', () => {
+  it('gives different mints different monograms', () => {
+    const a = render(<MintFavicon url="https://minibits.cash" iconUrl={null} />).container
+    const b = render(<MintFavicon url="https://coinos.io" iconUrl={null} />).container
+    expect(a.textContent).not.toBe(b.textContent)
+    expect(a.textContent).toBe('MI')
+    expect(b.textContent).toBe('CO')
+  })
+
+  it('falls back to the placeholder monogram when the proxied image fails to load', () => {
     const { container } = render(
       <MintFavicon url="https://mint.example" iconUrl="https://mint.example/i.png" />,
     )

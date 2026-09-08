@@ -8,6 +8,95 @@
 // 3 mirrors the audit-reliability "too few samples to score" floor.
 export const MIN_MEANINGFUL_REVIEWS = 3
 
+// ── Mint hostname ──────────────────────────────────────────────
+// Single shared implementation of the "URL → hostname (or the raw string if
+// unparsable)" fallback that several components used to each inline.
+export function mintHostname(url: string): string {
+  try { return new URL(url).hostname } catch { return url }
+}
+
+// ── Mint display name ──────────────────────────────────────────
+// The name shown on cards, in the Name sort, and in the Compare picker.
+// A mint's `name` comes from its own untrusted /v1/info — many mints ship a
+// generic placeholder ("Cashu", "Cashu mint", "mint") or wrap the name in
+// quotes. In those cases the hostname is the more useful title.
+//
+// "Cashu test mint" is deliberately NOT a denylist entry — it's a real known
+// test mint that carries its own "Test mint" badge, so its name is kept.
+const GENERIC_NAME_DENYLIST = new Set(['cashu', 'cashu mint', 'mint'])
+
+export function displayName(mint: { name?: string | null | undefined; url: string }): string {
+  const host = mintHostname(mint.url)
+  let name = (mint.name ?? '').trim()
+  // Strip a single pair of wrapping quotes (" or ').
+  if (name.length >= 2) {
+    const first = name[0]
+    const last = name[name.length - 1]
+    if ((first === '"' && last === '"') || (first === "'" && last === "'")) {
+      name = name.slice(1, -1).trim()
+    }
+  }
+  if (name === '' || GENERIC_NAME_DENYLIST.has(name.toLowerCase())) return host
+  return name
+}
+
+// ── Favicon fallback initials ──────────────────────────────────
+// Two letters derived from the hostname, so a mint with no icon still gets a
+// distinct placeholder instead of the same generic glyph as every other one.
+export function mintFaviconInitials(url: string): string {
+  const host = mintHostname(url).replace(/^www\./, '')
+  const label = host.split('.')[0] ?? host
+  const alnum = label.replace(/[^a-z0-9]/gi, '')
+  if (alnum.length >= 2) return alnum.slice(0, 2).toUpperCase()
+  if (alnum.length === 1) return alnum.toUpperCase()
+  return '??'
+}
+
+// ── "New" mint flag + "First seen" label (discovered_at) ───────
+// A mint is "New" for its first 30 days after MintRadar discovered it. This is
+// the ONLY age-derived badge on cards now — Established/Veteran/OG were removed.
+export const NEW_MINT_MAX_DAYS = 30
+
+export function isNewMint(
+  discoveredAt: string | null | undefined,
+  now: number = Date.now(),
+): boolean {
+  if (!discoveredAt) return false
+  const ts = new Date(discoveredAt).getTime()
+  if (!Number.isFinite(ts)) return false
+  return (now - ts) < NEW_MINT_MAX_DAYS * 24 * 60 * 60 * 1000
+}
+
+// "First seen <Mon YYYY>" for the Mint Detail header — derived from
+// discovered_at (when MintRadar first indexed the mint, not its true birth).
+export function firstSeenLabel(discoveredAt: string | null | undefined): string | null {
+  if (!discoveredAt) return null
+  const d = new Date(discoveredAt)
+  if (!Number.isFinite(d.getTime())) return null
+  const month = d.toLocaleString('en-US', { month: 'short', timeZone: 'UTC' })
+  return `First seen ${month} ${d.getUTCFullYear()}`
+}
+
+// ── Card trust display ────────────────────────────────────────
+// Always "Trust <n>" (word + number), never a bare "68%". Missing → "Trust n/a".
+export function cardTrustLabel(score: number | null | undefined): string {
+  return score === null || score === undefined ? 'Trust n/a' : `Trust ${score}`
+}
+
+// ── Card latency display ──────────────────────────────────────
+// Always renders something — never a blank or a dash:
+//   "123 ms"  — a latency sample exists
+//   "timeout" — the probe timed out
+//   "n/a"     — no sample yet / any other unreachable state
+export function cardLatencyLabel(mint: {
+  latencyMs?: number | null
+  lastError?: string | null
+}): string {
+  if (typeof mint.latencyMs === 'number' && mint.latencyMs >= 0) return `${mint.latencyMs} ms`
+  if (/time.?out/i.test(mint.lastError ?? '')) return 'timeout'
+  return 'n/a'
+}
+
 // ── Mint age badge ─────────────────────────────────────────────
 // Thresholds: < 1 month → Fresh, < 6 months → Established,
 //             < 12 months → Veteran, ≥ 12 months → OG

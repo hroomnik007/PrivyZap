@@ -18,7 +18,7 @@ import { useAuthStore } from '@/stores/auth.store'
 import { ComparisonModal } from '@/components/ComparisonModal'
 import { MintComparePicker } from '@/components/MintComparePicker'
 import { InfoTooltip } from '@/components/InfoTooltip'
-import { mintAgeBadge, trustScoreColor, trustScoreInfo, formatTimeAgo, formatAuditErrorRatio, trustDonutArc, auditReliabilityColor, MIN_MEANINGFUL_REVIEWS } from '@/utils/mintFormatting'
+import { displayName as mintDisplayName, isNewMint, firstSeenLabel, trustScoreColor, trustScoreInfo, formatTimeAgo, formatAuditErrorRatio, trustDonutArc, auditReliabilityColor, MIN_MEANINGFUL_REVIEWS } from '@/utils/mintFormatting'
 import { TRACKED_NUTS } from '@/constants/nuts'
 import { isTestMint } from '@/constants/testMints'
 import { auditReliabilityScore, isAuditUnknown } from '@/utils/auditScore'
@@ -597,8 +597,7 @@ function MintDetailContent({ url }: { url: string }) {
 
   const probeLoading = isLoading || data === undefined
 
-  const hostname = (() => { try { return new URL(url).hostname } catch { return url } })()
-  const displayName = data?.info?.name ?? knownMint?.name ?? hostname
+  const displayName = mintDisplayName({ name: data?.info?.name ?? knownMint?.name, url })
   const isOnline = data?.online ?? knownMint?.online ?? false
   const latency = knownMint?.latencyMs ?? null
   const version = data?.info?.version ?? knownMint?.version ?? undefined
@@ -691,7 +690,8 @@ function MintDetailContent({ url }: { url: string }) {
     { label: 'Contact (5%)', display: breakdownContactDisplay, score: breakdownCScore, max: 5, color: breakdownCScore >= 4 ? '#4ade80' : breakdownCScore >= 2 ? '#ffa500' : '#ff4d4d', tooltip: 'Number of contact methods provided (email, Twitter, Nostr). More contact options = higher score.', tooltipRef: breakdownContactRef, tooltipHook: breakdownContactTooltip },
     { label: 'Audit reliability (5%)', display: breakdownAuditDisplay, score: breakdownAScore, max: 5, color: recentReliabilityColor, tooltip: "Based on error rate from audit.8333.space — the percentage of failed swaps out of the mint's last ~100 tested operations. Lower error rate = higher score. Shows \"Unknown\" when fewer than 3 recent swaps are available.", tooltipRef: breakdownAuditRef, tooltipHook: breakdownAuditTooltip },
   ]
-  const ageBadge = mintAgeBadge(discoveredAt)
+  const firstSeen = firstSeenLabel(discoveredAt)
+  const isNew = isNewMint(discoveredAt)
   const isOutdated = version !== null && latestGlobalVersion !== null
     && (parseMinorVer(latestGlobalVersion) - parseMinorVer(version)) > 2
 
@@ -807,8 +807,11 @@ function MintDetailContent({ url }: { url: string }) {
                   <span className={`status-dot ${isOnline ? '' : 'offline'}`} />
                   <span>{isOnline ? 'Online' : 'Offline'}</span>
                 </span>
-                {ageBadge && (
-                  <span className="md-age-badge-inline" style={{fontSize:12,fontFamily:'var(--font-mono)',fontWeight:600,color:ageBadge.color,background:ageBadge.bg,border:`0.5px solid ${ageBadge.border}`,borderRadius:5,padding:'3px 9px',flexShrink:0}}>{ageBadge.label}</span>
+                {isNew && (
+                  <span className="md-age-badge-inline" style={{fontSize:12,fontFamily:'var(--font-mono)',fontWeight:600,color:'#d3a446',background:'rgba(211,164,70,.14)',border:'0.5px solid rgba(211,164,70,.3)',borderRadius:5,padding:'3px 9px',flexShrink:0}}>New</span>
+                )}
+                {firstSeen && (
+                  <span className="md-first-seen-inline" style={{fontSize:12,fontFamily:'var(--font-mono)',color:'var(--text-faint)',flexShrink:0}}>{firstSeen}</span>
                 )}
                 {isTestMint(url) && (
                   <span style={{fontSize:12,fontFamily:'var(--font-mono)',fontWeight:600,color:'var(--amber)',background:'var(--amber-soft)',border:'0.5px solid var(--amber-soft-strong)',borderRadius:5,padding:'3px 9px',flexShrink:0}} title="Not for real funds — for testing and development only">
@@ -2258,7 +2261,7 @@ function MintDetailContent({ url }: { url: string }) {
         return (
           <MintComparePicker
             candidates={candidates}
-            baseLabel={baseMint?.name ?? url}
+            baseLabel={baseMint ? mintDisplayName(baseMint) : displayName}
             onClose={() => setShowComparePicker(false)}
             onConfirm={urls => {
               setCompareSelectedUrls(new Set(urls))

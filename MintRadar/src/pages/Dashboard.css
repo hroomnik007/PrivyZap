@@ -29,6 +29,37 @@
   gap: 12px;
 }
 
+/* Two of the stat cards double as a toggle for the Listed/Known explainer. */
+.stat-card-btn {
+  font: inherit;
+  text-align: left;
+  cursor: pointer;
+  color: inherit;
+}
+.stat-card-btn:hover { border-color: var(--border-strong); }
+
+.stat-sub {
+  font-size: 10px;
+  color: var(--text-faint);
+  margin-top: 3px;
+  letter-spacing: 0.01em;
+}
+
+.stat-count-note {
+  margin: 8px var(--page-pad) 0;
+  font-size: 12px;
+  line-height: 1.5;
+  color: var(--text-dim);
+}
+.stat-count-note strong { color: var(--text); font-weight: 600; }
+
+.grid-score-explainer {
+  margin: 12px var(--page-pad) 0;
+  font-size: 12px;
+  line-height: 1.5;
+  color: var(--text-dim);
+}
+
 .stat-icon {
   width: 32px;
   height: 32px;

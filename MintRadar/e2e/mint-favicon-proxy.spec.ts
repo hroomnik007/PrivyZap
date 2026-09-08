@@ -59,7 +59,7 @@ test('falls back to the placeholder icon when the proxy has nothing to serve (40
   const alphaCard = page.locator('.mint-card', {
     has: page.locator('.card-name', { hasText: 'Alpha Mint' }),
   })
-  // onError swaps the <img> out for the SVG placeholder.
+  // onError swaps the <img> out for the monogram placeholder.
   await expect(alphaCard.locator('img')).toHaveCount(0)
-  await expect(alphaCard.locator('svg[aria-label*="mint icon placeholder"]')).toBeVisible()
+  await expect(alphaCard.locator('[aria-label*="mint icon placeholder"]')).toBeVisible()
 })

@@ -11,6 +11,12 @@ import {
   TRUST_DONUT_CIRCUMFERENCE,
   normalizeMintUrl,
   mintRiskLevel,
+  displayName,
+  mintFaviconInitials,
+  isNewMint,
+  firstSeenLabel,
+  cardTrustLabel,
+  cardLatencyLabel,
 } from '../utils/mintFormatting'
 
 // Inject a fixed `now` so tests are deterministic regardless of when they run.
@@ -99,6 +105,139 @@ describe('mintAgeBadge', () => {
 
   it('uses Date.now() when `now` is omitted (smoke test — just must not throw)', () => {
     expect(() => mintAgeBadge(daysAgo(10))).not.toThrow()
+  })
+})
+
+// ── displayName ────────────────────────────────────────────────
+describe('displayName', () => {
+  const host = 'https://mint.example.com'
+
+  it('returns a real name unchanged', () => {
+    expect(displayName({ name: 'Minibits', url: host })).toBe('Minibits')
+  })
+
+  it('trims surrounding whitespace', () => {
+    expect(displayName({ name: '  Minibits  ', url: host })).toBe('Minibits')
+  })
+
+  it('falls back to the hostname for an empty / missing / whitespace name', () => {
+    expect(displayName({ name: '', url: host })).toBe('mint.example.com')
+    expect(displayName({ name: null, url: host })).toBe('mint.example.com')
+    expect(displayName({ name: undefined, url: host })).toBe('mint.example.com')
+    expect(displayName({ name: '   ', url: host })).toBe('mint.example.com')
+  })
+
+  it('falls back to the hostname for a generic denylisted name (case-insensitive)', () => {
+    for (const n of ['cashu', 'Cashu', 'CASHU', 'cashu mint', 'Cashu Mint', 'mint', 'MINT']) {
+      expect(displayName({ name: n, url: host })).toBe('mint.example.com')
+    }
+  })
+
+  it('does NOT treat "Cashu test mint" as generic (real known test mint)', () => {
+    expect(displayName({ name: 'Cashu test mint', url: host })).toBe('Cashu test mint')
+  })
+
+  it('strips a single pair of wrapping double or single quotes', () => {
+    expect(displayName({ name: '"Minibits"', url: host })).toBe('Minibits')
+    expect(displayName({ name: "'Minibits'", url: host })).toBe('Minibits')
+  })
+
+  it('applies the denylist after stripping quotes', () => {
+    expect(displayName({ name: '"cashu"', url: host })).toBe('mint.example.com')
+  })
+
+  it('leaves an unparsable URL as the fallback string', () => {
+    expect(displayName({ name: '', url: 'not-a-url' })).toBe('not-a-url')
+  })
+})
+
+// ── mintFaviconInitials ───────────────────────────────────────
+describe('mintFaviconInitials', () => {
+  it('takes the first two letters of the first hostname label, uppercased', () => {
+    expect(mintFaviconInitials('https://minibits.cash')).toBe('MI')
+    expect(mintFaviconInitials('https://mint.example.com')).toBe('MI')
+  })
+
+  it('strips a leading www.', () => {
+    expect(mintFaviconInitials('https://www.coinos.io')).toBe('CO')
+  })
+
+  it('handles numeric hosts', () => {
+    expect(mintFaviconInitials('https://8333.space:3338')).toBe('83')
+  })
+
+  it('does not return the same value for two different mints', () => {
+    expect(mintFaviconInitials('https://minibits.cash'))
+      .not.toBe(mintFaviconInitials('https://coinos.io'))
+  })
+})
+
+// ── isNewMint (30-day threshold) ──────────────────────────────
+describe('isNewMint', () => {
+  it('is false for a null / undefined discoveredAt', () => {
+    expect(isNewMint(null, NOW)).toBe(false)
+    expect(isNewMint(undefined, NOW)).toBe(false)
+  })
+
+  it('is true just under 30 days', () => {
+    expect(isNewMint(daysAgo(29), NOW)).toBe(true)
+    expect(isNewMint(daysAgo(0), NOW)).toBe(true)
+  })
+
+  it('is false at or past the 30-day boundary', () => {
+    expect(isNewMint(daysAgo(30), NOW)).toBe(false)
+    expect(isNewMint(daysAgo(31), NOW)).toBe(false)
+    expect(isNewMint(daysAgo(400), NOW)).toBe(false)
+  })
+})
+
+// ── firstSeenLabel ────────────────────────────────────────────
+describe('firstSeenLabel', () => {
+  it('formats as "First seen <Mon YYYY>"', () => {
+    expect(firstSeenLabel('2026-06-18T09:00:00.000Z')).toBe('First seen Jun 2026')
+    expect(firstSeenLabel('2025-01-02T00:00:00.000Z')).toBe('First seen Jan 2025')
+  })
+
+  it('returns null for a missing / unparsable value', () => {
+    expect(firstSeenLabel(null)).toBeNull()
+    expect(firstSeenLabel(undefined)).toBeNull()
+    expect(firstSeenLabel('nonsense')).toBeNull()
+  })
+})
+
+// ── cardTrustLabel ───────────────────────────────────────────
+describe('cardTrustLabel', () => {
+  it('is "Trust <n>" for a number, never a bare percentage', () => {
+    expect(cardTrustLabel(68)).toBe('Trust 68')
+    expect(cardTrustLabel(0)).toBe('Trust 0')
+    expect(cardTrustLabel(100)).toBe('Trust 100')
+  })
+
+  it('is "Trust n/a" for null / undefined', () => {
+    expect(cardTrustLabel(null)).toBe('Trust n/a')
+    expect(cardTrustLabel(undefined)).toBe('Trust n/a')
+  })
+})
+
+// ── cardLatencyLabel (sampled / timeout / n/a — never blank) ──
+describe('cardLatencyLabel', () => {
+  it('renders "<n> ms" when a sample exists', () => {
+    expect(cardLatencyLabel({ latencyMs: 123 })).toBe('123 ms')
+    expect(cardLatencyLabel({ latencyMs: 0 })).toBe('0 ms')
+  })
+
+  it('renders "timeout" when the probe timed out and there is no sample', () => {
+    expect(cardLatencyLabel({ latencyMs: null, lastError: 'Connection timeout' })).toBe('timeout')
+  })
+
+  it('renders "n/a" when there is no sample yet', () => {
+    expect(cardLatencyLabel({ latencyMs: null })).toBe('n/a')
+    expect(cardLatencyLabel({ latencyMs: null, lastError: 'HTTP 500' })).toBe('n/a')
+    expect(cardLatencyLabel({})).toBe('n/a')
+  })
+
+  it('prefers a real sample even if an error is also present', () => {
+    expect(cardLatencyLabel({ latencyMs: 88, lastError: 'Connection timeout' })).toBe('88 ms')
   })
 })
 

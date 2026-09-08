@@ -9,7 +9,7 @@ import type { KnownMint } from '@/hooks/useKnownMints'
 import { useWatchlistStore } from '@/stores/watchlist.store'
 import { useAuthStore } from '@/stores/auth.store'
 import { useUserRelays } from '@/hooks/useUserRelays'
-import { mintAgeBadge, uptimeColor, formatTimeAgo, MIN_MEANINGFUL_REVIEWS } from '@/utils/mintFormatting'
+import { displayName as mintDisplayName, isNewMint, cardTrustLabel, cardLatencyLabel, uptimeColor, formatTimeAgo, MIN_MEANINGFUL_REVIEWS } from '@/utils/mintFormatting'
 import { isTestMint } from '@/constants/testMints'
 import { db } from '@/db'
 import { resolveNotificationRelays, syncSubscribeToServer, syncUnsubscribeFromServer } from '@/core/nostr/notificationSubscription'
@@ -105,9 +105,10 @@ export function MintCard({
   }
   const isOnline = mint.online === true
   const isOfflineDegraded = mint.degraded === true
-  const displayName = mint.name ?? hostname
+  const displayName = mintDisplayName(mint)
+  const showHost = displayName !== hostname
   const uptimePct24h = mint.uptimePct24h ?? null
-  const ageBadge = mintAgeBadge(mint.discoveredAt ?? null)
+  const isNew = isNewMint(mint.discoveredAt ?? null)
 
   return (
     <div
@@ -121,15 +122,15 @@ export function MintCard({
           <MintFavicon url={mint.url} iconUrl={mint.iconUrl ?? null} size={28} radius={6} />
           <div style={{ minWidth: 0 }}>
             <div className="card-name">{displayName}</div>
-            {mint.name && <div className="card-host">{hostname}</div>}
+            {showHost && <div className="card-host">{hostname}</div>}
           </div>
           {isOfflineDegraded ? (
             <span style={{ fontSize: 10, fontFamily: 'var(--font-mono)', fontWeight: 600, color: 'var(--red)', background: 'var(--red-soft)', border: '1px solid rgba(219,106,93,0.3)', borderRadius: 5, padding: '2px 7px', flexShrink: 0, marginLeft: 'auto', marginRight: 12 }}>
               Offline 24h+
             </span>
-          ) : ageBadge && (
-            <span style={{ fontSize: 10, fontFamily: 'var(--font-mono)', color: ageBadge.color, background: ageBadge.bg, border: `1px solid ${ageBadge.border}`, borderRadius: 5, padding: '2px 7px', flexShrink: 0, marginLeft: 'auto', marginRight: 12 }}>
-              {ageBadge.label}
+          ) : isNew && (
+            <span style={{ fontSize: 10, fontFamily: 'var(--font-mono)', fontWeight: 600, color: '#d3a446', background: 'rgba(211,164,70,.14)', border: '1px solid rgba(211,164,70,.3)', borderRadius: 5, padding: '2px 7px', flexShrink: 0, marginLeft: 'auto', marginRight: 12 }}>
+              New
             </span>
           )}
         </div>
@@ -153,14 +154,12 @@ export function MintCard({
         )}
         {uptimePct24h !== null && (
           <span className="card-pill" style={{ color: uptimeColor(uptimePct24h), fontFamily: 'var(--font-mono-data)' }}>
-            {uptimePct24h}% up
+            {uptimePct24h}% up 24h
           </span>
         )}
-        {mint.online === true && mint.trustScore != null && (
-          <span className="card-pill" style={{ color: mint.trustScore >= 70 ? 'var(--green-bright)' : mint.trustScore >= 40 ? 'var(--amber)' : 'var(--red)', display: 'flex', alignItems: 'center', gap: 4, fontFamily: 'var(--font-mono-data)' }}>
-            <IcShield /><span>{mint.trustScore}%</span>
-          </span>
-        )}
+        <span className="card-pill" style={{ color: mint.trustScore == null ? 'var(--t3)' : mint.trustScore >= 70 ? 'var(--green-bright)' : mint.trustScore >= 40 ? 'var(--amber)' : 'var(--red)', display: 'flex', alignItems: 'center', gap: 4, fontFamily: 'var(--font-mono-data)' }}>
+          <IcShield /><span>{cardTrustLabel(mint.trustScore)}</span>
+        </span>
         {(mint.reviewCount ?? 0) > 0 && mint.reviewAvgRating != null && (
           <span
             className="card-pill"
@@ -205,7 +204,7 @@ export function MintCard({
               {mint.latencyMs}<span className="latency-unit">ms</span>
             </div>
           ) : (
-            <div className="latency-value muted">—</div>
+            <div className="latency-value muted">{cardLatencyLabel(mint)}</div>
           )}
         </div>
         <div className="card-actions">

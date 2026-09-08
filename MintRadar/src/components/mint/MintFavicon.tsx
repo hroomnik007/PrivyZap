@@ -1,4 +1,5 @@
 import { useState } from 'react'
+import { mintFaviconInitials, mintHostname } from '@/utils/mintFormatting'
 
 interface Props {
   url: string
@@ -9,7 +10,7 @@ interface Props {
 }
 
 export function MintFavicon({ url, iconUrl, size = 22, radius = 5, className = '' }: Props) {
-  const hostname = (() => { try { return new URL(url).hostname } catch { return url } })()
+  const hostname = mintHostname(url)
   const [imgFailed, setImgFailed] = useState(false)
 
   // `iconUrl` is treated as a boolean hint ("this mint has an icon") ONLY — the
@@ -39,30 +40,32 @@ export function MintFavicon({ url, iconUrl, size = 22, radius = 5, className = '
     )
   }
 
-  const iconSize = size * 0.64
+  // No icon (or the proxied one failed): a two-letter monogram derived from the
+  // hostname, so each mint gets a distinct placeholder rather than an identical
+  // generic glyph.
+  const initials = mintFaviconInitials(url)
 
   return (
     <div
       className={className}
+      role="img"
+      aria-label={`${hostname} mint icon placeholder`}
       style={{
         width: size, height: size, minWidth: size,
-        borderRadius: radius, background: 'var(--bg3)',
-        border: '0.5px solid var(--border)',
+        borderRadius: radius, background: 'var(--copper-soft)',
+        border: '0.5px solid var(--copper)',
         display: 'flex', alignItems: 'center', justifyContent: 'center',
         flexShrink: 0,
+        color: 'var(--copper)',
+        fontFamily: 'var(--font-mono)',
+        fontWeight: 700,
+        fontSize: Math.round(size * 0.42),
+        lineHeight: 1,
+        letterSpacing: '0.02em',
+        userSelect: 'none',
       }}
     >
-      <svg
-        width={iconSize}
-        height={iconSize}
-        viewBox="0 0 24 24"
-        role="img"
-        aria-label={`${hostname} mint icon placeholder`}
-      >
-        <circle cx="12" cy="12" r="9" fill="var(--copper-soft)" stroke="var(--copper)" strokeWidth="1.5" />
-        <circle cx="12" cy="12" r="6.2" fill="none" stroke="var(--copper)" strokeWidth="1" opacity="0.45" />
-        <path d="M7 15.5a6.9 6.9 0 0 0 10 0" fill="none" stroke="var(--copper)" strokeWidth="1" strokeLinecap="round" opacity="0.3" />
-      </svg>
+      {initials}
     </div>
   )
 }

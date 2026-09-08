@@ -30,10 +30,11 @@ test.describe('MintCard — Community Rating badge', () => {
 
   test('Trust Score badge uses a shield icon, not a star', async ({ page }) => {
     await page.goto('/')
-    const trustPill = card(page, 'Alpha Mint').locator('.card-pill', { hasText: '92%' })
+    const trustPill = card(page, 'Alpha Mint').locator('.card-pill', { hasText: 'Trust 92' })
     await expect(trustPill).toBeVisible()
     await expect(trustPill.locator('svg')).toHaveCount(1)
     await expect(trustPill).not.toContainText('★')
+    await expect(trustPill).not.toContainText('%')
   })
 
   test('badge is shared with the Watchlist card', async ({ page }) => {

@@ -1,10 +1,7 @@
 import { useState } from 'react'
 import { type KnownMint } from '@/hooks/useKnownMints'
+import { displayName as mintDisplayName, mintHostname as getHostname } from '@/utils/mintFormatting'
 import './MintComparePicker.css'
-
-function getHostname(url: string): string {
-  try { return new URL(url).hostname } catch { return url }
-}
 
 // Shared "Compare with..." mint picker — opened from both Dashboard (per-card
 // ⇄ Compare button) and MintDetail (header Compare button) ahead of
@@ -29,7 +26,7 @@ export function MintComparePicker({
 
   const q = search.toLowerCase()
   const filtered = candidates.filter(m =>
-    q === '' || (m.name ?? m.url).toLowerCase().includes(q) || m.url.toLowerCase().includes(q)
+    q === '' || mintDisplayName(m).toLowerCase().includes(q) || m.url.toLowerCase().includes(q)
   )
 
   return (
@@ -74,7 +71,7 @@ export function MintComparePicker({
                 </div>
                 <span style={{ width: 7, height: 7, borderRadius: '50%', background: m.online === true ? 'var(--accent)' : '#ff4d4d', display: 'inline-block', flexShrink: 0 }} />
                 <div style={{ minWidth: 0 }}>
-                  <div style={{ fontSize: 12, fontWeight: 500, color: 'var(--text)', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{m.name ?? getHostname(m.url)}</div>
+                  <div style={{ fontSize: 12, fontWeight: 500, color: 'var(--text)', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{mintDisplayName(m)}</div>
                   <div style={{ fontSize: 10, color: 'var(--text3)', fontFamily: 'var(--font-mono)', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{getHostname(m.url)}</div>
                 </div>
               </div>

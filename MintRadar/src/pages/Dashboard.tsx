@@ -15,8 +15,7 @@ import type { MintStatus } from '@core/mint/api'
 import { MintCard } from '@/components/mint/MintCard'
 import { MintComparePicker } from '@/components/MintComparePicker'
 import { useMintHoverPrefetch } from '@/hooks/useMintHoverPrefetch'
-import { useIsMobile } from '@/hooks/useIsMobile'
-import { mintAgeBadge, latencyColor, trustColor, uptimeColor } from '@/utils/mintFormatting'
+import { mintAgeBadge, latencyColor, trustColor, uptimeColor, displayName as mintDisplayName } from '@/utils/mintFormatting'
 import './Dashboard.css'
 
 // Historical trend charts pull in Recharts (~380 kB chunk) — lazy-load so
@@ -280,7 +279,7 @@ function MintListView({
         const cb = b.reviewCount && b.reviewCount > 0 ? b.reviewCount : -1
         result = cb - ca
       } else {
-        result = (a.name ?? getHostname(a.url)).localeCompare(b.name ?? getHostname(b.url))
+        result = mintDisplayName(a).localeCompare(mintDisplayName(b))
       }
       return sortDir === DEFAULT_SORT_DIRS[sortBy] ? result : -result
     })
@@ -304,7 +303,7 @@ function MintListView({
           <tbody>
             {sortedFiltered.map(mint => {
               const isOnline = mint.online === true
-              const displayName = mint.name ?? getHostname(mint.url)
+              const displayName = mintDisplayName(mint)
               const ageBadge = mintAgeBadge(mint.discoveredAt ?? null)
               const score = mint.trustScore ?? null
               return (
@@ -313,7 +312,7 @@ function MintListView({
                     <MintFavicon url={mint.url} iconUrl={mint.iconUrl ?? null} size={24} radius={5} />
                     <div style={{ minWidth: 0 }}>
                       <div className="mint-list-name">{displayName}</div>
-                      {mint.name && <div className="mint-list-url">{getHostname(mint.url)}</div>}
+                      {displayName !== getHostname(mint.url) && <div className="mint-list-url">{getHostname(mint.url)}</div>}
                     </div>
                   </td>
                   <td>
@@ -397,7 +396,7 @@ function MintGrid({
         const cb = b.reviewCount && b.reviewCount > 0 ? b.reviewCount : -1
         result = cb - ca
       } else {
-        result = (a.name ?? getHostname(a.url)).localeCompare(b.name ?? getHostname(b.url))
+        result = mintDisplayName(a).localeCompare(mintDisplayName(b))
       }
       return sortDir === DEFAULT_SORT_DIRS[sortBy] ? result : -result
     })
@@ -457,7 +456,6 @@ export default function Dashboard() {
   // browser back/forward navigation changed activeFilters while closed.
   const [showFilters, setShowFilters] = useState(false)
   const [pendingFilters, setPendingFilters] = useState<FilterState>(DEFAULT_FILTERS)
-  const isMobile = useIsMobile()
 
   // Comparison state
   const [compareBaseUrl, setCompareBaseUrl] = useState<string | null>(null)
@@ -471,6 +469,7 @@ export default function Dashboard() {
   }
 
   const [, setTick] = useState(0)
+  const [showCountNote, setShowCountNote] = useState(false)
   const [showDegraded, setShowDegraded] = useState(false)
   const [showSubmit, setShowSubmit] = useState(false)
   const [submitTab, setSubmitTab] = useState<'single' | 'bulk'>('single')
@@ -814,13 +813,14 @@ export default function Dashboard() {
   return (
     <div className="dashboard">
       <div className="stats-bar">
-        <div className="stat-card">
+        <button type="button" className="stat-card stat-card-btn" onClick={() => setShowCountNote(v => !v)} aria-expanded={showCountNote}>
           <div className="stat-icon green"><IcSignal /></div>
           <div>
             <div className="stat-label">Online Mints</div>
             <div className="stat-value green">{onlineCount} / {totalCount}</div>
+            <div className="stat-sub">of {totalCount} listed</div>
           </div>
-        </div>
+        </button>
         <div className="stat-card">
           <div className="stat-icon orange"><IcTimer /></div>
           <div>
@@ -828,15 +828,17 @@ export default function Dashboard() {
             <div className="stat-value">
               {avgLatency24h !== null ? `${avgLatency24h} ms` : '—'}
             </div>
+            <div className="stat-sub">from Frankfurt</div>
           </div>
         </div>
-        <div className="stat-card">
+        <button type="button" className="stat-card stat-card-btn" onClick={() => setShowCountNote(v => !v)} aria-expanded={showCountNote}>
           <div className="stat-icon gray"><IcGrid /></div>
           <div>
-            <div className="stat-label">Known Mints</div>
+            <div className="stat-label">All Known</div>
             <div className="stat-value">{knownMintsData?.length ?? 0}</div>
+            <div className="stat-sub">incl. offline</div>
           </div>
-        </div>
+        </button>
         <div className="stat-card">
           <div className="stat-icon gray"><IcSuccess /></div>
           <div>
@@ -845,6 +847,12 @@ export default function Dashboard() {
           </div>
         </div>
       </div>
+      {showCountNote && (
+        <p className="stat-count-note">
+          <strong>Listed</strong> = in the grid (not hidden after 24h offline).{' '}
+          <strong>Known</strong> = every mint we indexed.
+        </p>
+      )}
 
       <div className="dashboard-controls">
         {/* Wrapper is `display: contents` on desktop (transparent to the flex
@@ -857,7 +865,7 @@ export default function Dashboard() {
               ref={searchInputRef}
               className="search-input"
               type="text"
-              placeholder={isMobile ? 'Search mints…  ( / )' : 'Search mints by name, URL or version…  ( / )'}
+              placeholder="Search mints"
               value={search}
               onChange={e => commitFilters({ search: e.target.value }, { replace: true })}
               onFocus={() => setSearchFocused(true)}
@@ -917,6 +925,10 @@ export default function Dashboard() {
           <IcPlus /> Submit mint
         </button>
       </div>
+
+      <p className="grid-score-explainer">
+        Trust is our operational score (uptime, protocol, software, audit). Stars are community reviews — read both.
+      </p>
 
       {showFilters && (
         <div className="filter-panel">
@@ -1047,7 +1059,7 @@ export default function Dashboard() {
         return (
           <MintComparePicker
             candidates={candidates}
-            baseLabel={baseMint?.name ?? compareBaseUrl}
+            baseLabel={baseMint ? mintDisplayName(baseMint) : compareBaseUrl}
             onClose={() => setShowComparePicker(false)}
             onConfirm={urls => {
               setCompareSelectedUrls(new Set(urls))
