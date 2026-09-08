@@ -17,7 +17,10 @@ import {
   firstSeenLabel,
   cardTrustLabel,
   cardLatencyLabel,
+  cardLightningLabel,
 } from '../utils/mintFormatting'
+
+const M = (method: string, unit = 'sat') => ({ method, unit, min_amount: 0, max_amount: 1000 })
 
 // Inject a fixed `now` so tests are deterministic regardless of when they run.
 const NOW = Date.parse('2026-06-30T12:00:00.000Z')
@@ -247,6 +250,55 @@ describe('cardLatencyLabel', () => {
 
   it('prefers a real sample even if an error is also present', () => {
     expect(cardLatencyLabel({ latencyMs: 88, lastError: 'Connection timeout' })).toBe('88 ms')
+  })
+})
+
+// ── cardLightningLabel (optional MintCard Lightning chip) ─────
+describe('cardLightningLabel', () => {
+  it('is "LN" when bolt11 is on both mint and melt', () => {
+    expect(cardLightningLabel({ mintMethods: [M('bolt11')], meltMethods: [M('bolt11')] })).toBe('LN')
+  })
+
+  it('counts bolt12 as Lightning', () => {
+    expect(cardLightningLabel({ mintMethods: [M('bolt12')], meltMethods: [M('bolt12')] })).toBe('LN')
+  })
+
+  it('is case-insensitive on the method name', () => {
+    expect(cardLightningLabel({ mintMethods: [M('BOLT11')], meltMethods: [M('Bolt11')] })).toBe('LN')
+  })
+
+  it('is "LN in" when Lightning is on mint only', () => {
+    expect(cardLightningLabel({ mintMethods: [M('bolt11')], meltMethods: [M('onchain')] })).toBe('LN in')
+    expect(cardLightningLabel({ mintMethods: [M('bolt11')], meltMethods: null })).toBe('LN in')
+  })
+
+  it('is "LN out" when Lightning is on melt only', () => {
+    expect(cardLightningLabel({ mintMethods: [M('onchain')], meltMethods: [M('bolt11')] })).toBe('LN out')
+    expect(cardLightningLabel({ mintMethods: null, meltMethods: [M('bolt11')] })).toBe('LN out')
+  })
+
+  it('is null for empty method arrays', () => {
+    expect(cardLightningLabel({ mintMethods: [], meltMethods: [] })).toBeNull()
+  })
+
+  it('is null when both sides are null / undefined', () => {
+    expect(cardLightningLabel({ mintMethods: null, meltMethods: null })).toBeNull()
+    expect(cardLightningLabel({})).toBeNull()
+  })
+
+  it('is null for onchain-only (not Lightning)', () => {
+    expect(cardLightningLabel({ mintMethods: [M('onchain')], meltMethods: [M('onchain')] })).toBeNull()
+  })
+
+  it('is null for other non-Lightning methods (venmo / paypal)', () => {
+    expect(cardLightningLabel({ mintMethods: [M('venmo')], meltMethods: [M('paypal')] })).toBeNull()
+  })
+
+  it('still returns "LN" for a mixed bolt11 + onchain method set', () => {
+    expect(cardLightningLabel({
+      mintMethods: [M('bolt11'), M('onchain')],
+      meltMethods: [M('onchain'), M('bolt11')],
+    })).toBe('LN')
   })
 })
 

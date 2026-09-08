@@ -88,6 +88,39 @@ export function cardTrustLabel(score: number | null | undefined): string {
   return score === null || score === undefined ? 'Trust n/a' : `Trust ${score}`
 }
 
+// ── Card Lightning chip ───────────────────────────────────────
+// Optional chip summarising whether the mint advertises Lightning support for
+// minting and/or melting, derived from the NUT-04 / NUT-05 method entries
+// already carried on KnownMint (mintMethods / meltMethods from
+// /api/mints/known). A method counts as Lightning if its `method` is bolt11 or
+// bolt12 (case-insensitive) — onchain / venmo / paypal / anything else is
+// ignored here (those stay in Mint Detail). Returns null when we can't assert
+// Lightning on either side (methods missing/empty, or no LN method present) so
+// the card renders nothing rather than a guess.
+//   'LN'     — Lightning on both mint and melt
+//   'LN in'  — mint only
+//   'LN out' — melt only
+type CardMethodEntry = { method?: string | null; [key: string]: unknown }
+
+function methodsHaveLightning(methods: CardMethodEntry[] | null | undefined): boolean {
+  return Array.isArray(methods) && methods.some(e => {
+    const m = typeof e.method === 'string' ? e.method.toLowerCase() : ''
+    return m === 'bolt11' || m === 'bolt12'
+  })
+}
+
+export function cardLightningLabel(mint: {
+  mintMethods?: CardMethodEntry[] | null
+  meltMethods?: CardMethodEntry[] | null
+}): 'LN' | 'LN in' | 'LN out' | null {
+  const mintLn = methodsHaveLightning(mint.mintMethods)
+  const meltLn = methodsHaveLightning(mint.meltMethods)
+  if (mintLn && meltLn) return 'LN'
+  if (mintLn) return 'LN in'
+  if (meltLn) return 'LN out'
+  return null
+}
+
 // ── Card latency display ──────────────────────────────────────
 // Always renders something — never a blank or a dash:
 //   "123 ms"  — a latency sample exists

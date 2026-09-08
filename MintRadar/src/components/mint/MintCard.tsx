@@ -9,7 +9,7 @@ import type { KnownMint } from '@/hooks/useKnownMints'
 import { useWatchlistStore } from '@/stores/watchlist.store'
 import { useAuthStore } from '@/stores/auth.store'
 import { useUserRelays } from '@/hooks/useUserRelays'
-import { displayName as mintDisplayName, isNewMint, cardTrustLabel, cardLatencyLabel, uptimeColor, formatTimeAgo, MIN_MEANINGFUL_REVIEWS } from '@/utils/mintFormatting'
+import { displayName as mintDisplayName, isNewMint, cardTrustLabel, cardLatencyLabel, cardLightningLabel, uptimeColor, formatTimeAgo, MIN_MEANINGFUL_REVIEWS } from '@/utils/mintFormatting'
 import { isTestMint } from '@/constants/testMints'
 import { db } from '@/db'
 import { resolveNotificationRelays, syncSubscribeToServer, syncUnsubscribeFromServer } from '@/core/nostr/notificationSubscription'
@@ -109,6 +109,7 @@ export function MintCard({
   const showHost = displayName !== hostname
   const uptimePct24h = mint.uptimePct24h ?? null
   const isNew = isNewMint(mint.discoveredAt ?? null)
+  const lightningLabel = cardLightningLabel(mint)
 
   return (
     <div
@@ -150,6 +151,21 @@ export function MintCard({
         {mint.units && mint.units.length > 0 && (
           <span className="card-pill" style={{ fontFamily: 'var(--font-mono-data)' }}>
             {mint.units.map(u => u.toUpperCase()).join(' / ')}
+          </span>
+        )}
+        {lightningLabel && (
+          <span
+            className="card-pill"
+            style={{ fontFamily: 'var(--font-mono-data)' }}
+            title={
+              lightningLabel === 'LN'
+                ? 'Lightning (bolt11/bolt12) supported for minting and melting'
+                : lightningLabel === 'LN in'
+                  ? 'Lightning supported for minting only'
+                  : 'Lightning supported for melting only'
+            }
+          >
+            ⚡ {lightningLabel}
           </span>
         )}
         {uptimePct24h !== null && (

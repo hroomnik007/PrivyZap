@@ -40,6 +40,24 @@ test.describe('MintCard — copy & reduced badge set', () => {
     await expect(card(page, 'Alpha Mint').locator('.card-pill', { hasText: '99% up 24h' })).toBeVisible()
   })
 
+  test('Lightning chip: "⚡ LN" when bolt11 is on mint + melt, nothing when methods are absent', async ({ page }) => {
+    // Fixture buildMethods() gives bolt11 on both sides for any mint with units;
+    // Charlie has units: null → no methods → no chip.
+    const rows = MOCK_KNOWN_MINTS.map(m => {
+      if (m.name === 'Bravo Mint') return { ...m, meltMethods: [{ method: 'onchain', unit: 'sat' }] }
+      return m
+    })
+    await page.route('**/api/mints/known', route => route.fulfill({ json: rows }))
+    await page.goto('/')
+    await expect(page.locator('.mint-card')).toHaveCount(4)
+
+    await expect(card(page, 'Alpha Mint').locator('.card-pill', { hasText: '⚡ LN' })).toHaveText('⚡ LN')
+    // mint has bolt11, melt is onchain-only → "LN in"
+    await expect(card(page, 'Bravo Mint').locator('.card-pill', { hasText: '⚡ LN in' })).toBeVisible()
+    // no method data at all → no chip
+    await expect(card(page, 'Charlie Mint').locator('.card-pill', { hasText: '⚡' })).toHaveCount(0)
+  })
+
   test('latency row is never blank — sampled / timeout / n/a', async ({ page }) => {
     const rows = MOCK_KNOWN_MINTS.map(m => {
       if (m.name === 'Bravo Mint') return { ...m, online: false, latencyMs: null, lastError: 'Connection timeout' }
