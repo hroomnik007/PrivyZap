@@ -125,7 +125,10 @@ async function main() {
   await Promise.allSettled(
     PUBLISH_RELAYS.map(async relay => {
       try {
-        await pool.publish([relay], event)
+        // SimplePool.publish() returns an array of per-relay promises — it must
+        // be awaited via Promise.all(), not `await` on the array itself (which
+        // resolves immediately and never confirms the relay's OK).
+        await Promise.all(pool.publish([relay], event))
         console.log(`  ✓ ${relay}`)
         published++
       } catch (err) {
