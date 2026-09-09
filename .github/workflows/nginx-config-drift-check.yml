@@ -26,7 +26,7 @@ jobs:
           key: ${{ secrets.HETZNER_SSH_KEY }}
           capture_stdout: true
           script: |
-            sudo cat /etc/nginx/sites-available/mintradar.pedani.eu.conf
+            sudo cat /etc/nginx/sites-available/mintradar.org.conf
 
       - name: Diff repo config against live config
         env:
@@ -42,7 +42,7 @@ jobs:
             echo "## Nginx Config Drift Check"
             echo ""
             echo "Comparing \`deploy/nginx.conf\` (repo) against"
-            echo "\`/etc/nginx/sites-available/mintradar.pedani.eu.conf\` (live on server)."
+            echo "\`/etc/nginx/sites-available/mintradar.org.conf\` (live on server)."
             echo ""
           } >> "$GITHUB_STEP_SUMMARY"
 
