@@ -44,7 +44,8 @@ const WebSocket = req(resolve(BACKEND, 'ws'))
 const PUBLISH_RELAYS = [
   'wss://relay.damus.io',
   'wss://nos.lol',
-  'wss://relay.nostr.band',
+  'wss://purplepag.es',
+  'wss://relay.primal.net',
   'wss://relay.snort.social',
 ]
 
@@ -99,12 +100,12 @@ async function main() {
     content: JSON.stringify({
       name: 'MintRadar',
       about: 'Real-time Cashu mint monitoring dashboard with Trust Score, NUT compatibility, uptime tracking and community reviews.',
-      website: 'https://mintradar.pedani.eu',
+      website: 'https://mintradar.org',
     }),
     tags: [
       ['d', 'mintradar-handler-38172'],
       ['k', '38172'],
-      ['web', 'https://mintradar.pedani.eu/mint/<bech32>', 'naddr'],
+      ['web', 'https://mintradar.org/mint/<bech32>', 'naddr'],
     ],
   }, privkey)
 

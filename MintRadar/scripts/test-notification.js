@@ -195,7 +195,7 @@ async function main() {
 
       // Same message template as the hook
       const message =
-        `⚠️ MintRadar Alert\n\nMint is down: ${mintUrl}\n\nCheck status: https://mintradar.pedani.eu`
+        `⚠️ MintRadar Alert\n\nMint is down: ${mintUrl}\n\nCheck status: https://mintradar.org`
 
       try {
         const eventId = await sendNostrDM(privkey, pubkey, message, nostrPool)

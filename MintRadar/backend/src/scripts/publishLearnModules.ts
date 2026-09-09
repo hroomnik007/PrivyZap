@@ -103,7 +103,7 @@ function convertInline(text: string): string {
     .replace(/<strong>([\s\S]*?)<\/strong>/g, '**$1**')
     .replace(/<em>([\s\S]*?)<\/em>/g, '*$1*')
     .replace(/<a href="([^"]+)"[^>]*>([\s\S]*?)<\/a>/g, '[$2]($1)')
-    .replace(/<Link to="([^"]+)"[^>]*>([\s\S]*?)<\/Link>/g, (_m, to: string, label: string) => `[${label}](https://mintradar.pedani.eu${to})`)
+    .replace(/<Link to="([^"]+)"[^>]*>([\s\S]*?)<\/Link>/g, (_m, to: string, label: string) => `[${label}](https://mintradar.org${to})`)
     .replace(/<code>([\s\S]*?)<\/code>/g, '`$1`')
     .replace(/\s+/g, ' ')
     .trim()
@@ -138,9 +138,9 @@ function extractBlocks(body: string): string[] {
       const lines = convertInline(keyTakeaway).split(/(?<=[.!?])\s+/)
       blocks.push(['> 🔑 **Key takeaway**', '>', ...lines.map(l => `> ${l}`)].join('\n'))
     } else if (linkTo !== undefined) {
-      blocks.push(`[${convertInline(linkLabel!)}](https://mintradar.pedani.eu${linkTo})`)
+      blocks.push(`[${convertInline(linkLabel!)}](https://mintradar.org${linkTo})`)
     } else if (selfClosingComponent !== undefined) {
-      blocks.push(`*(interactive diagram — best viewed at mintradar.pedani.eu/learn)*`)
+      blocks.push(`*(interactive diagram — best viewed at mintradar.org/learn)*`)
     } else if (p !== undefined) {
       blocks.push(convertInline(p))
     }
