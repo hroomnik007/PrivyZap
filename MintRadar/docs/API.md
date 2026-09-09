@@ -1,6 +1,6 @@
 # MintRadar Public API
 
-MintRadar provides a public read-only API for querying Cashu mint data. All endpoints are served under the same origin as the web app (`https://mintradar.pedani.eu/api/`).
+MintRadar provides a public read-only API for querying Cashu mint data. All endpoints are served under the same origin as the web app (`https://mintradar.org/api/`).
 
 > **Note:** This API is unofficial and may change without notice. It is intended for personal use and light integrations — not for high-frequency scraping or production dependencies.
 

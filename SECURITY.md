@@ -2,7 +2,7 @@
 
 ## Reporting a Vulnerability
 
-**Preferred:** Nostr DM to the project maintainer — npub is listed on [mintradar.pedani.eu](https://mintradar.pedani.eu).
+**Preferred:** Nostr DM to the project maintainer — npub is listed on [mintradar.org](https://mintradar.org).
 
 **Alternative:** [GitHub private vulnerability reporting](https://github.com/hroomnik007/MintRadar/security/advisories/new)
 

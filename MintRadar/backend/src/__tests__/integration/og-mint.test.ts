@@ -46,7 +46,7 @@ describe('GET /api/og/mint', () => {
     expect(res.headers['content-type']).toContain('text/html')
     expect(res.text).toContain('<title>Example Mint — MintRadar</title>')
     expect(res.text).toContain('Trust Score: 87% · Online')
-    expect(res.text).toContain('og:url" content="https://mintradar.pedani.eu/mint/https%3A%2F%2Fmint.example.com"')
+    expect(res.text).toContain('og:url" content="https://mintradar.org/mint/https%3A%2F%2Fmint.example.com"')
   })
 
   it('sets a Cache-Control max-age header', async () => {

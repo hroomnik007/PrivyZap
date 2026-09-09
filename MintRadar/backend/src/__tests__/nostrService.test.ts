@@ -114,9 +114,9 @@ describe('publishServiceProfile', () => {
     const content: unknown = JSON.parse(event.content)
     expect(content).toEqual({
       name: 'MintRadar Alerts',
-      about: expect.stringContaining('mintradar.pedani.eu') as unknown,
-      website: 'https://mintradar.pedani.eu',
-      picture: 'https://mintradar.pedani.eu/icons/icon-512x512.png',
+      about: expect.stringContaining('mintradar.org') as unknown,
+      website: 'https://mintradar.org',
+      picture: 'https://mintradar.org/icons/icon-512x512.png',
     })
   })
 })
@@ -266,7 +266,7 @@ describe('notifySubscribers', () => {
 
     const [, giftWrap] = publishMock.mock.calls[0] as [string[], NostrEvent]
     const rumor = nip17.unwrapEvent(giftWrap, recipientSecretKey)
-    const expectedUrl = `https://mintradar.pedani.eu/mint/${encodeURIComponent(MINT)}`
+    const expectedUrl = `https://mintradar.org/mint/${encodeURIComponent(MINT)}`
     expect(rumor.content).toBe(`⚠️ mint.example.com just went offline.\nView details: ${expectedUrl}`)
   })
 
@@ -280,7 +280,7 @@ describe('notifySubscribers', () => {
 
     const [, giftWrap] = publishMock.mock.calls[0] as [string[], NostrEvent]
     const rumor = nip17.unwrapEvent(giftWrap, recipientSecretKey)
-    const expectedUrl = `https://mintradar.pedani.eu/mint/${encodeURIComponent(MINT)}`
+    const expectedUrl = `https://mintradar.org/mint/${encodeURIComponent(MINT)}`
     expect(rumor.content).toBe(`✅ mint.example.com is back online.\nView details: ${expectedUrl}`)
   })
 

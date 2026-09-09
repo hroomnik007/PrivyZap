@@ -2,7 +2,7 @@
 
 ## Project
 Privacy-first Cashu mint monitoring PWA.
-Live: https://mintradar.pedani.eu
+Live: https://mintradar.org
 GitHub: https://github.com/hroomnik007/MintRadar
 
 ## Server

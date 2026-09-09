@@ -6,7 +6,7 @@
 [![Self-Hostable](https://img.shields.io/badge/self--hostable-yes-green.svg)](#-getting-started--self-hosting)
 [![Open Source](https://img.shields.io/badge/open%20source-%E2%9D%A4-red.svg)](https://github.com/hroomnik007/MintRadar)
 
-**Live:** [mintradar.pedani.eu](https://mintradar.pedani.eu)
+**Live:** [mintradar.org](https://mintradar.org)
 
 ---
 
@@ -244,7 +244,7 @@ Issues and pull requests are welcome. Please open an issue to discuss significan
 
 ## 🔗 Links
 
-- [MintRadar](https://mintradar.pedani.eu)
+- [MintRadar](https://mintradar.org)
 - [Cashu Protocol](https://cashu.space)
 - [Nostr Protocol](https://nostr.com)
 - [NIP-87 — Mint Discovery](https://github.com/nostr-protocol/nips/blob/master/87.md)

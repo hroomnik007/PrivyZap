@@ -118,7 +118,7 @@ _(2026-09-07: the Vite v8 upgrade shipped — both trees are now at 0 vulnerabil
 **What was checked:** CORS configuration, rate limiting, SQL query patterns, input validation on all endpoints.
 
 **CORS:**
-- Production origin: `https://mintradar.pedani.eu` only (hardcoded default, no wildcard).
+- Production origin: `https://mintradar.org` (and `https://mintradar.pedani.eu` while the old domain runs in parallel) — hardcoded default, no wildcard.
 - Configurable via `ALLOWED_ORIGINS` env var.
 - Dev default: adds `http://localhost:5173`.
 - `null` origin (e.g. file:// or no-origin) is allowed — this is intentional for health check accessibility and low-risk since no auth cookies exist. ✅

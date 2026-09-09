@@ -47,8 +47,8 @@ const IS_DEV = process.env['NODE_ENV'] !== 'production'
 // In production the fallback never includes localhost — only the live origin.
 // Dev fallback includes the Vite dev server. Override via ALLOWED_ORIGINS env.
 const DEFAULT_ORIGINS = IS_DEV
-  ? 'https://mintradar.pedani.eu,http://localhost:5173'
-  : 'https://mintradar.pedani.eu'
+  ? 'https://mintradar.org,https://mintradar.pedani.eu,http://localhost:5173'
+  : 'https://mintradar.org,https://mintradar.pedani.eu'
 
 const ALLOWED_ORIGINS = (
   process.env['ALLOWED_ORIGINS'] ?? DEFAULT_ORIGINS

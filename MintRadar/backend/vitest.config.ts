@@ -11,7 +11,7 @@ export default defineConfig({
     env: {
       NODE_ENV: 'test',
       DATABASE_URL: 'postgres://test:test@localhost:5432/mintradar_test',
-      ALLOWED_ORIGINS: 'https://mintradar.pedani.eu,http://localhost:5173',
+      ALLOWED_ORIGINS: 'https://mintradar.org,http://localhost:5173',
     },
     coverage: {
       provider: 'v8',

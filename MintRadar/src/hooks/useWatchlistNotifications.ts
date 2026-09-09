@@ -61,7 +61,7 @@ export function useWatchlistNotifications(
             if (import.meta.env.DEV) console.log(`[notifications] mint down: ${url}`)
             await sendNostrDM(
               profile.pubkey,
-              `⚠️ MintRadar Alert\n\nMint is down: ${url}\n\nCheck status: https://mintradar.pedani.eu`,
+              `⚠️ MintRadar Alert\n\nMint is down: ${url}\n\nCheck status: https://mintradar.org`,
               dmRelays
             )
           }
@@ -91,7 +91,7 @@ export function useWatchlistNotifications(
               const mintId = encodeURIComponent(url)
               await sendNostrDM(
                 profile.pubkey,
-                `⚡ MintRadar Alert\n\nTrust Score for ${url} changed from ${prevScore}% to ${currentScore}%.\n\nCheck details: https://mintradar.pedani.eu/mint/${mintId}`,
+                `⚡ MintRadar Alert\n\nTrust Score for ${url} changed from ${prevScore}% to ${currentScore}%.\n\nCheck details: https://mintradar.org/mint/${mintId}`,
                 dmRelays
               )
             }

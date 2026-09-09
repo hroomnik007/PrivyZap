@@ -66,12 +66,12 @@ describe('authenticateNip98 — request URL reconstruction behind nginx', () => 
     const { authenticateNip98 } = await import('../nip98Auth.js')
 
     const { token, pubkey } = await signedToken(
-      'https://mintradar.pedani.eu/api/notifications/subscribe',
+      'https://mintradar.org/api/notifications/subscribe',
       'POST'
     )
     const req = fakeRequest({
       authorization: token,
-      host: 'mintradar.pedani.eu',
+      host: 'mintradar.org',
       originalUrl: '/api/notifications/subscribe',
       method: 'POST',
       // no forwardedProto — reproduces the actual live nginx config
@@ -101,10 +101,10 @@ describe('authenticateNip98 — request URL reconstruction behind nginx', () => 
     vi.resetModules()
     const { authenticateNip98 } = await import('../nip98Auth.js')
 
-    const { token, pubkey } = await signedToken('https://mintradar.pedani.eu/api/notifications/subscribe', 'POST')
+    const { token, pubkey } = await signedToken('https://mintradar.org/api/notifications/subscribe', 'POST')
     const req = fakeRequest({
       authorization: token,
-      host: 'mintradar.pedani.eu',
+      host: 'mintradar.org',
       originalUrl: '/api/notifications/subscribe',
       method: 'POST',
       forwardedProto: 'https',
@@ -119,10 +119,10 @@ describe('authenticateNip98 — request URL reconstruction behind nginx', () => 
     const { authenticateNip98 } = await import('../nip98Auth.js')
 
     // Signed for http while the reconstructed URL (prod, no header) is https.
-    const { token } = await signedToken('http://mintradar.pedani.eu/api/notifications/subscribe', 'POST')
+    const { token } = await signedToken('http://mintradar.org/api/notifications/subscribe', 'POST')
     const req = fakeRequest({
       authorization: token,
-      host: 'mintradar.pedani.eu',
+      host: 'mintradar.org',
       originalUrl: '/api/notifications/subscribe',
       method: 'POST',
     })
@@ -133,7 +133,7 @@ describe('authenticateNip98 — request URL reconstruction behind nginx', () => 
 })
 
 describe('authenticateNip98 — replay / nonce cache', () => {
-  const URL = 'https://mintradar.pedani.eu/api/notifications/subscribe'
+  const URL = 'https://mintradar.org/api/notifications/subscribe'
 
   it('rejects the second use of the same token id within the validity window (body-swap replay)', async () => {
     process.env['NODE_ENV'] = 'production'
@@ -143,7 +143,7 @@ describe('authenticateNip98 — replay / nonce cache', () => {
     const { token, pubkey } = await signedToken(URL, 'POST')
     const mkReq = () => fakeRequest({
       authorization: token,
-      host: 'mintradar.pedani.eu',
+      host: 'mintradar.org',
       originalUrl: '/api/notifications/subscribe',
       method: 'POST',
     })
@@ -172,11 +172,11 @@ describe('authenticateNip98 — replay / nonce cache', () => {
 
     expect(a.token).not.toBe(b.token)
     expect((await authenticateNip98(fakeRequest({
-      authorization: a.token, host: 'mintradar.pedani.eu',
+      authorization: a.token, host: 'mintradar.org',
       originalUrl: '/api/notifications/subscribe', method: 'POST',
     })).then(r => r.ok))).toBe(true)
     expect((await authenticateNip98(fakeRequest({
-      authorization: b.token, host: 'mintradar.pedani.eu',
+      authorization: b.token, host: 'mintradar.org',
       originalUrl: '/api/notifications/subscribe', method: 'POST',
     })).then(r => r.ok))).toBe(true)
   })
@@ -188,7 +188,7 @@ describe('authenticateNip98 — replay / nonce cache', () => {
 
     const { token } = await signedToken(URL, 'POST')
     const mkReq = () => fakeRequest({
-      authorization: token, host: 'mintradar.pedani.eu',
+      authorization: token, host: 'mintradar.org',
       originalUrl: '/api/notifications/subscribe', method: 'POST',
     })
 

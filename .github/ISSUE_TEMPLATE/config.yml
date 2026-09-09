@@ -2,7 +2,7 @@ blank_issues_enabled: false
 contact_links:
   - name: 🔒 Security vulnerability
     url: https://github.com/hroomnik007/MintRadar/security/advisories/new
-    about: Do NOT open a public issue for security bugs. Report privately here, or via Nostr DM to the maintainer (npub on mintradar.pedani.eu). See SECURITY.md.
+    about: Do NOT open a public issue for security bugs. Report privately here, or via Nostr DM to the maintainer (npub on mintradar.org). See SECURITY.md.
   - name: 💬 Question or general discussion
     url: https://github.com/hroomnik007/MintRadar/discussions
     about: For usage questions and open-ended discussion.

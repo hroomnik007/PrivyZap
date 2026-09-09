@@ -41,5 +41,5 @@
   <rect x="510" y="422" width="260" height="68" fill="#161B22" rx="10" stroke="#1E2229" stroke-width="1.5"/>
   <text x="640" y="464" font-family="monospace" font-size="24" fill="#00E676" text-anchor="middle">✓ Nostr Login</text>
 
-  <text x="600" y="548" font-family="monospace" font-size="22" fill="#444B5A" text-anchor="middle">mintradar.pedani.eu · Open source · Privacy first</text>
+  <text x="600" y="548" font-family="monospace" font-size="22" fill="#444B5A" text-anchor="middle">mintradar.org · Open source · Privacy first</text>
 </svg>

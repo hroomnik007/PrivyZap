@@ -40,9 +40,9 @@ describe('renderMintOgHtml', () => {
     expect(html).toContain('<title>Example Mint — MintRadar</title>')
     expect(html).toContain('property="og:title" content="Example Mint — MintRadar"')
     expect(html).toContain('content="Trust Score: 87% · Online"')
-    expect(html).toContain(`property="og:url" content="https://mintradar.pedani.eu/mint/${encodeURIComponent(mintUrl)}"`)
+    expect(html).toContain(`property="og:url" content="https://mintradar.org/mint/${encodeURIComponent(mintUrl)}"`)
     expect(html).toContain('name="twitter:card" content="summary_large_image"')
-    expect(html).toContain('property="og:image" content="https://mintradar.pedani.eu/og-image.png"')
+    expect(html).toContain('property="og:image" content="https://mintradar.org/og-image.png"')
   })
 
   it('falls back to the mint URL as the display name when name is null', () => {
@@ -74,12 +74,12 @@ describe('renderMintOgHtml', () => {
     const html = renderMintOgHtml(null, mintUrl)
     expect(html).toContain('<title>MintRadar - Cashu Mint Monitor</title>')
     expect(html).toContain('Real-time Trust Score, latency &amp; NUT monitoring for Cashu mints.')
-    expect(html).toContain(`property="og:url" content="https://mintradar.pedani.eu/mint/${encodeURIComponent(mintUrl)}"`)
+    expect(html).toContain(`property="og:url" content="https://mintradar.org/mint/${encodeURIComponent(mintUrl)}"`)
   })
 
   it('falls back to the site homepage as og:url when no mint URL is given', () => {
     const html = renderMintOgHtml(null, '')
-    expect(html).toContain('property="og:url" content="https://mintradar.pedani.eu"')
+    expect(html).toContain('property="og:url" content="https://mintradar.org"')
   })
 
   it('always returns a well-formed HTML document (doctype + closing tags)', () => {

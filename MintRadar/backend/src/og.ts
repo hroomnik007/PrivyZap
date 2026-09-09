@@ -32,7 +32,7 @@ export function mintStatusLabel(mint: Pick<OgMintData, 'online' | 'degraded'>): 
   return 'Offline'
 }
 
-const SITE_URL = 'https://mintradar.pedani.eu'
+const SITE_URL = 'https://mintradar.org'
 const OG_IMAGE_URL = `${SITE_URL}/og-image.png`
 
 // Renders the standalone OG HTML fragment for one mint. `mint` is null when

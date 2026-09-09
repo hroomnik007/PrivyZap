@@ -147,9 +147,9 @@ export async function publishServiceProfile(): Promise<void> {
         kind: 0,
         content: JSON.stringify({
           name: 'MintRadar Alerts',
-          about: 'Automated Cashu mint status notifications from mintradar.pedani.eu. Replies are not monitored — manage your subscriptions in the app.',
-          website: 'https://mintradar.pedani.eu',
-          picture: 'https://mintradar.pedani.eu/icons/icon-512x512.png',
+          about: 'Automated Cashu mint status notifications from mintradar.org. Replies are not monitored — manage your subscriptions in the app.',
+          website: 'https://mintradar.org',
+          picture: 'https://mintradar.org/icons/icon-512x512.png',
         }),
         tags: [],
         created_at: Math.floor(Date.now() / 1000),
@@ -235,7 +235,7 @@ export async function notifySubscribers(mintUrl: string, direction: 'down' | 'up
     if (rows.length === 0) return
 
     const hostname = new URL(mintUrl).hostname
-    const detailUrl = `https://mintradar.pedani.eu/mint/${encodeURIComponent(mintUrl)}`
+    const detailUrl = `https://mintradar.org/mint/${encodeURIComponent(mintUrl)}`
     const message = direction === 'down'
       ? `⚠️ ${hostname} just went offline.\nView details: ${detailUrl}`
       : `✅ ${hostname} is back online.\nView details: ${detailUrl}`

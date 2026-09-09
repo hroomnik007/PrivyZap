@@ -4,7 +4,7 @@ import type { Express } from 'express'
 
 // CORS is configured in index.ts with an origin allow-list (ALLOWED_ORIGINS).
 // The test env sets ALLOWED_ORIGINS to:
-//   https://mintradar.pedani.eu, http://localhost:5173
+//   https://mintradar.org, http://localhost:5173
 // (see vitest.config.ts). The middleware reflects an allowed Origin back in
 // Access-Control-Allow-Origin and rejects everything else. Same-origin / no-Origin
 // requests (curl, server-to-server) are always permitted.
@@ -14,7 +14,7 @@ vi.mock('../../db.js', () => ({
   initDb: vi.fn(),
 }))
 
-const ALLOWED = 'https://mintradar.pedani.eu'
+const ALLOWED = 'https://mintradar.org'
 const ALLOWED_DEV = 'http://localhost:5173'
 const DISALLOWED = 'https://evil.attacker.example'
 
